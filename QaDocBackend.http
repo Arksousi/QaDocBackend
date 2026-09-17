@@ -1,0 +1,39 @@
+﻿@api = http://localhost:5134/api
+
+### Project Menu
+GET {{api}}/projects
+###
+GET {{api}}/projects/recent?top=5
+###
+POST {{api}}/projects
+Content-Type: application/json
+
+{ "projectName": "Web Shop" }
+
+### Ticket Viewer (filters optional)
+GET {{api}}/projects/1/tickets?search=&state=Open&tag=
+###
+GET {{api}}/projects/1/suggestions
+
+### Tickets
+POST {{api}}/tickets
+Content-Type: application/json
+
+{ "projectId": 1, "title": "Login button does nothing", "assignedTo": "Dana", "state": "Open", "priority": 2, "impact": "High", "tags": ["login", "ui"] }
+
+###
+GET {{api}}/tickets/1
+###
+PUT {{api}}/tickets/1
+Content-Type: application/json
+
+{ "title": "Login button does nothing", "assignedTo": "Dana", "state": "In Progress", "priority": 1, "impact": "Critical", "tags": ["login"] }
+
+###
+POST {{api}}/tickets/1/comments
+Content-Type: application/json
+
+{ "author": "QA Tester", "text": "Reproduced on Chrome 130." }
+
+###
+DELETE {{api}}/tickets/1
