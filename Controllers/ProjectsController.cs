@@ -59,10 +59,10 @@ public class ProjectsController(
     [HttpGet("{id:int}/tickets")]
     public async Task<ActionResult<IEnumerable<Ticket>>> GetTickets(
         int id, [FromQuery] int? folderId, [FromQuery] string? search, [FromQuery] string? state,
-        [FromQuery] string? tag, [FromQuery] int? assignedTo)
+        [FromQuery] string? type, [FromQuery] string? tag, [FromQuery] int? assignedTo)
     {
         if (await access.GetAsync(User, id) == ProjectAccess.None) return NotFoundProject(id);
-        return Ok(await tickets.GetByProjectAsync(id, folderId, search, state, tag, assignedTo));
+        return Ok(await tickets.GetByProjectAsync(id, folderId, search, state, type, tag, assignedTo));
     }
 
     /// <summary>Tags already used in the project, for autocomplete.</summary>

@@ -8,7 +8,7 @@ namespace QaDocBackend.Repositories;
 public interface ITicketRepository
 {
     /// <summary>Tickets in a project, optionally narrowed to one folder.</summary>
-    Task<IEnumerable<Ticket>> GetByProjectAsync(int projectId, int? folderId, string? search, string? state, string? tag, int? assignedToUserId);
+    Task<IEnumerable<Ticket>> GetByProjectAsync(int projectId, int? folderId, string? search, string? state, string? type, string? tag, int? assignedToUserId);
     Task<Ticket?> GetByIdAsync(int ticketId);
     Task<int> CreateAsync(SaveTicketRequest request, int userId);
     Task<UpdateOutcome> UpdateAsync(int ticketId, SaveTicketRequest request, int userId);
@@ -27,7 +27,8 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
         SELECT t.TicketId, t.ProjectId, t.FolderId, t.Sequence, t.Title,
                f.FolderName, f.FolderCode,
                p.ProjectCode || '-' || f.FolderCode || '-' || lpad(t.Sequence::text, 4, '0') AS TicketKey,
-               t.AssignedToUserId, a.DisplayName AS AssignedToName,
+               t.TicketType, t.AssignedToUserId, a.DisplayName AS AssignedToName,
+               ab.DisplayName AS AssignedByName,
                t.State, t.Priority, t.Impact, t.CreatedAt, t.ActivityDate,
                cb.DisplayName AS CreatedByName, ub.DisplayName AS UpdatedByName,
                (SELECT COUNT(*) FROM TicketComments c WHERE c.TicketId = t.TicketId) AS CommentCount
@@ -35,17 +36,19 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
         JOIN Folders f     ON f.FolderId = t.FolderId
         JOIN Projects p    ON p.ProjectId = t.ProjectId
         LEFT JOIN Users a  ON a.UserId  = t.AssignedToUserId
+        LEFT JOIN Users ab ON ab.UserId = t.AssignedByUserId
         LEFT JOIN Users cb ON cb.UserId = t.CreatedByUserId
         LEFT JOIN Users ub ON ub.UserId = t.UpdatedByUserId";
 
     public async Task<IEnumerable<Ticket>> GetByProjectAsync(
-        int projectId, int? folderId, string? search, string? state, string? tag, int? assignedToUserId)
+        int projectId, int? folderId, string? search, string? state, string? type, string? tag, int? assignedToUserId)
     {
         string sql = $@"
             {TicketSelect}
             WHERE t.ProjectId = @ProjectId
               AND (@FolderId::int IS NULL OR t.FolderId = @FolderId)
               AND (@State::text IS NULL OR t.State = @State)
+              AND (@Type::text IS NULL OR t.TicketType = @Type)
               AND (@AssignedTo::int IS NULL OR t.AssignedToUserId = @AssignedTo)
               AND (@Tag::text IS NULL OR EXISTS (SELECT 1 FROM TicketTags tt WHERE tt.TicketId = t.TicketId AND lower(tt.Tag) = lower(@Tag)))
               AND (@Search::text IS NULL
@@ -65,6 +68,7 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
             cmd.Parameters.AddInt("ProjectId", projectId);
             cmd.Parameters.AddInt("FolderId", folderId);
             cmd.Parameters.AddText("State", string.IsNullOrWhiteSpace(state) ? null : state);
+            cmd.Parameters.AddText("Type", string.IsNullOrWhiteSpace(type) ? null : type);
             cmd.Parameters.AddInt("AssignedTo", assignedToUserId);
             cmd.Parameters.AddText("Tag", string.IsNullOrWhiteSpace(tag) ? null : tag.Trim());
             cmd.Parameters.AddText("Search", searchText == null ? null : SqlExtensions.EscapeLike(searchText));
@@ -140,8 +144,8 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
     public async Task<int> CreateAsync(SaveTicketRequest request, int userId)
     {
         const string sql = @"
-            INSERT INTO Tickets (ProjectId, FolderId, Sequence, Title, Description, AssignedToUserId, State, Priority, Impact, CreatedByUserId, UpdatedByUserId)
-            VALUES (@ProjectId, @FolderId, @Sequence, @Title, @Description, @AssignedTo, @State, @Priority, @Impact, @UserId, @UserId)
+            INSERT INTO Tickets (ProjectId, FolderId, Sequence, Title, Description, TicketType, AssignedToUserId, AssignedByUserId, State, Priority, Impact, CreatedByUserId, UpdatedByUserId)
+            VALUES (@ProjectId, @FolderId, @Sequence, @Title, @Description, @TicketType, @AssignedTo, @AssignedBy, @State, @Priority, @Impact, @UserId, @UserId)
             RETURNING TicketId;";
 
         await using var conn = await db.OpenAsync();
@@ -166,6 +170,8 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
         await using (var cmd = new NpgsqlCommand(sql, conn, tx))
         {
             AddTicketParams(cmd, request);
+            // Creating a ticket already assigned counts as assigning it.
+            cmd.Parameters.AddInt("AssignedBy", request.AssignedToUserId == null ? null : userId);
             cmd.Parameters.AddInt("ProjectId", projectId);
             cmd.Parameters.AddInt("FolderId", request.FolderId);
             cmd.Parameters.AddInt("Sequence", sequence);
@@ -200,8 +206,10 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
         // Descriptions can contain pictures, so history records that it changed but not the text.
         if (!string.Equals(before.Description, CleanDescription(request.Description), StringComparison.Ordinal))
             changes.Add(("Description", null, null));
-        if (request.AssignedToUserId != before.AssignedToUserId)
+        bool assigneeChanged = request.AssignedToUserId != before.AssignedToUserId;
+        if (assigneeChanged)
             changes.Add(("Assigned To", before.AssignedToName ?? "Unassigned", newAssignee ?? "Unassigned"));
+        Track("Type", before.TicketType, request.TicketType);
         Track("State", before.State, request.State);
         Track("Priority", before.Priority.ToString(), request.Priority.ToString());
         Track("Impact", before.Impact, request.Impact);
@@ -212,12 +220,18 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
 
         const string sql = @"
             UPDATE Tickets
-            SET Title = @Title, Description = @Description, AssignedToUserId = @AssignedTo, State = @State,
+            SET Title = @Title, Description = @Description, TicketType = @TicketType,
+                AssignedToUserId = @AssignedTo, AssignedByUserId = @AssignedBy, State = @State,
                 Priority = @Priority, Impact = @Impact, UpdatedByUserId = @UserId, ActivityDate = now()
             WHERE TicketId = @TicketId;";
         await using (var cmd = new NpgsqlCommand(sql, conn, tx))
         {
             AddTicketParams(cmd, request);
+            // Only a change of assignee changes who assigned it; other edits leave that alone.
+            int? assignedBy = request.AssignedToUserId == null ? null
+                : assigneeChanged ? userId
+                : before.AssignedByUserId;
+            cmd.Parameters.AddInt("AssignedBy", assignedBy);
             cmd.Parameters.AddInt("TicketId", ticketId);
             cmd.Parameters.AddInt("UserId", userId);
             await cmd.ExecuteNonQueryAsync();
@@ -262,12 +276,14 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
         return await reader.ReadAsync() ? MapComment(reader) : null;
     }
 
-    private sealed record Snapshot(string Title, string? Description, int? AssignedToUserId, string? AssignedToName, string State, int Priority, string Impact, List<string> Tags);
+    private sealed record Snapshot(string Title, string? Description, string TicketType, int? AssignedToUserId,
+        string? AssignedToName, int? AssignedByUserId, string State, int Priority, string Impact, List<string> Tags);
 
     private static async Task<Snapshot?> ReadForUpdateAsync(NpgsqlConnection conn, NpgsqlTransaction tx, int ticketId)
     {
         const string sql = @"
-            SELECT t.Title, t.Description, t.AssignedToUserId, u.DisplayName AS AssignedToName, t.State, t.Priority, t.Impact
+            SELECT t.Title, t.Description, t.TicketType, t.AssignedToUserId, u.DisplayName AS AssignedToName,
+                   t.AssignedByUserId, t.State, t.Priority, t.Impact
             FROM Tickets t LEFT JOIN Users u ON u.UserId = t.AssignedToUserId
             WHERE t.TicketId = @TicketId
             FOR UPDATE OF t;
@@ -276,7 +292,8 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
         cmd.Parameters.AddInt("TicketId", ticketId);
         await using var r = await cmd.ExecuteReaderAsync();
         if (!await r.ReadAsync()) return null;
-        var snapshot = new Snapshot(r.Str("Title"), r.NStr("Description"), r.NInt("AssignedToUserId"), r.NStr("AssignedToName"),
+        var snapshot = new Snapshot(r.Str("Title"), r.NStr("Description"), r.Str("TicketType"), r.NInt("AssignedToUserId"),
+                                    r.NStr("AssignedToName"), r.NInt("AssignedByUserId"),
                                     r.Str("State"), r.Int("Priority"), r.Str("Impact"), []);
         await r.NextResultAsync();
         while (await r.ReadAsync()) snapshot.Tags.Add(r.Str("Tag"));
@@ -329,6 +346,7 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
     {
         cmd.Parameters.AddText("Title", r.Title.Trim());
         cmd.Parameters.AddText("Description", CleanDescription(r.Description));
+        cmd.Parameters.AddText("TicketType", r.TicketType);
         cmd.Parameters.AddInt("AssignedTo", r.AssignedToUserId);
         cmd.Parameters.AddText("State", r.State);
         cmd.Parameters.AddInt("Priority", r.Priority);
@@ -349,8 +367,10 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
         FolderName = r.Str("FolderName"),
         FolderCode = r.Str("FolderCode"),
         Title = r.Str("Title"),
+        TicketType = r.Str("TicketType"),
         AssignedToUserId = r.NInt("AssignedToUserId"),
         AssignedToName = r.NStr("AssignedToName"),
+        AssignedByName = r.NStr("AssignedByName"),
         State = r.Str("State"),
         Priority = r.Int("Priority"),
         Impact = r.Str("Impact"),

@@ -80,7 +80,11 @@ CREATE TABLE IF NOT EXISTS tickets (
     sequence         INTEGER NOT NULL,
     title            VARCHAR(200) NOT NULL,
     description      TEXT NULL,                         -- HTML; pictures embedded as data URLs
+    tickettype       VARCHAR(20) NOT NULL DEFAULT 'Bug'
+                     CHECK (tickettype IN ('Bug', 'Enhancement')),
     assignedtouserid INTEGER NULL REFERENCES users (userid),
+    -- Who put the current assignee there: the creator, or whoever changed it last.
+    assignedbyuserid INTEGER NULL REFERENCES users (userid),
     state            VARCHAR(20) NOT NULL DEFAULT 'Open'
                      CHECK (state IN ('Open', 'In Progress', 'Resolved', 'Retest', 'Closed')),
     priority         SMALLINT NOT NULL DEFAULT 3 CHECK (priority BETWEEN 1 AND 4),
@@ -153,6 +157,14 @@ CREATE INDEX IF NOT EXISTS ix_ticketattachments_project ON ticketattachments (pr
 ALTER TABLE tickets DROP CONSTRAINT IF EXISTS tickets_impact_check;
 ALTER TABLE tickets ADD CONSTRAINT tickets_impact_check
     CHECK (impact IN ('Low', 'Medium', 'High', 'Critical', 'Showstopper'));
+
+-- Tickets gained a type (Bug / Enhancement) and a record of who assigned them.
+-- Existing rows become Bugs, which is what they all were.
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS tickettype VARCHAR(20) NOT NULL DEFAULT 'Bug';
+ALTER TABLE tickets DROP CONSTRAINT IF EXISTS tickets_tickettype_check;
+ALTER TABLE tickets ADD CONSTRAINT tickets_tickettype_check
+    CHECK (tickettype IN ('Bug', 'Enhancement'));
+ALTER TABLE tickets ADD COLUMN IF NOT EXISTS assignedbyuserid INTEGER NULL REFERENCES users (userid);
 
 -- ---------- Project - Folder - Ticket ----------
 -- Added nullable first so existing rows survive; the block below fills them and the

@@ -2,6 +2,12 @@ using System.ComponentModel.DataAnnotations;
 
 namespace QaDocBackend.Models;
 
+public static class TicketTypes
+{
+    public const string Bug = "Bug";
+    public const string Enhancement = "Enhancement";
+}
+
 public class Ticket
 {
     public int TicketId { get; set; }
@@ -15,8 +21,12 @@ public class Ticket
     public string FolderCode { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string? Description { get; set; }
+    /// <summary>"Bug" or "Enhancement".</summary>
+    public string TicketType { get; set; } = TicketTypes.Bug;
     public int? AssignedToUserId { get; set; }
     public string? AssignedToName { get; set; }
+    /// <summary>Who gave it to the current assignee. Null while the ticket is unassigned.</summary>
+    public string? AssignedByName { get; set; }
     public string State { get; set; } = "Open";
     public int Priority { get; set; } = 3;
     public string Impact { get; set; } = "Medium";
@@ -70,6 +80,9 @@ public class SaveTicketRequest
 
     /// <summary>Null means unassigned. Must be an active user.</summary>
     public int? AssignedToUserId { get; set; }
+
+    [AllowedValues(TicketTypes.Bug, TicketTypes.Enhancement, ErrorMessage = "Type must be Bug or Enhancement.")]
+    public string TicketType { get; set; } = TicketTypes.Bug;
 
     [AllowedValues("Open", "In Progress", "Resolved", "Retest", "Closed", ErrorMessage = "State must be Open, In Progress, Resolved, Retest or Closed.")]
     public string State { get; set; } = "Open";

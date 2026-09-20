@@ -90,3 +90,4 @@ C:\Users\Arks\AppData\Local\Temp\claude\d--dev-QaDoc\433f4fee-a904-4e42-b708-fe9
 C:\Users\Arks\AppData\Local\Temp\claude\d--dev-QaDoc\433f4fee-a904-4e42-b708-fe9e748496e0\scratchpad\apibuild-pg\QaDocBackend.dll
 C:\Users\Arks\AppData\Local\Temp\claude\d--dev-QaDoc\433f4fee-a904-4e42-b708-fe9e748496e0\scratchpad\apibuild-pg\QaDocBackend.pdb
 D:\dev\QaDoc\QaDocBackend\bin\Debug\net9.0\Npgsql.dll
+D:\dev\QaDoc\QaDocBackend\obj\Debug\net9.0\QaDocBackend.sourcelink.json
