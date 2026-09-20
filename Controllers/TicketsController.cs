@@ -39,7 +39,7 @@ public class TicketsController(
         if (level == ProjectAccess.None)
             return ValidationProblem(detail: $"Folder #{request.FolderId} does not exist.");
         if (level < ProjectAccess.Contributor) return Forbid();
-        if (await ValidateAsync(request, currentAssignee: null) is { } problem) return problem;
+        if (await ValidateAsync(request, folder.ProjectId, currentAssignee: null) is { } problem) return problem;
 
         int newId = await tickets.CreateAsync(request, User.GetUserId());
         return CreatedAtAction(nameof(GetById), new { id = newId }, new { id = newId });
@@ -55,7 +55,7 @@ public class TicketsController(
         var level = await access.GetAsync(User, existing.ProjectId);
         if (level == ProjectAccess.None) return NotFoundTicket(id);
         if (level < ProjectAccess.Contributor) return Forbid();
-        if (await ValidateAsync(request, existing.AssignedToUserId) is { } problem) return problem;
+        if (await ValidateAsync(request, existing.ProjectId, existing.AssignedToUserId) is { } problem) return problem;
 
         await tickets.UpdateAsync(id, request, User.GetUserId());
         return NoContent();
@@ -83,14 +83,21 @@ public class TicketsController(
     private NotFoundObjectResult NotFoundTicket(int id) => NotFound(new { message = $"Ticket #{id} not found." });
 
     /// <summary>Checks title and assignee, and normalises tags (trimmed, no blanks, case-insensitive distinct).</summary>
-    private async Task<ActionResult?> ValidateAsync(SaveTicketRequest request, int? currentAssignee)
+    private async Task<ActionResult?> ValidateAsync(SaveTicketRequest request, int projectId, int? currentAssignee)
     {
         if (string.IsNullOrWhiteSpace(request.Title))
             return ValidationProblem(detail: "Title is required.");
 
-        // Keeping an existing assignee who was later deactivated is allowed; newly assigning one is not.
-        if (request.AssignedToUserId is int assignee && assignee != currentAssignee && !await users.IsActiveUserAsync(assignee))
-            return ValidationProblem(detail: "Assigned To must be an active user.");
+        // A ticket can only be given to somebody who actually works on the project: Contributor or
+        // Manager, or a global Admin. Keeping an assignee who has since lost access or been
+        // deactivated is allowed, so old tickets stay editable; newly assigning one is not.
+        if (request.AssignedToUserId is int assignee && assignee != currentAssignee)
+        {
+            if (!await users.IsActiveUserAsync(assignee))
+                return ValidationProblem(detail: "Assigned To must be an active user.");
+            if (await access.GetForUserAsync(assignee, projectId) < ProjectAccess.Contributor)
+                return ValidationProblem(detail: "Assigned To must be a Contributor or Manager on this project.");
+        }
 
         request.Tags = (request.Tags ?? [])
             .Select(t => t?.Trim() ?? string.Empty)

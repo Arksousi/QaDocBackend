@@ -9,6 +9,8 @@ public interface IProjectMemberRepository
     /// <summary>The user's role in the project, or null when they are not a member.</summary>
     Task<string?> GetRoleAsync(int projectId, int userId);
     Task<IEnumerable<ProjectMember>> GetByProjectAsync(int projectId);
+    /// <summary>Active users a ticket here may be given to: Contributors, Managers and global Admins.</summary>
+    Task<IEnumerable<UserOption>> GetAssignableAsync(int projectId);
     /// <summary>Adds the member, or changes their role when they are already on the project.</summary>
     Task SaveAsync(int projectId, int userId, string role);
     Task<bool> RemoveAsync(int projectId, int userId);
@@ -53,6 +55,24 @@ public class ProjectMemberRepository(ISqlConnectionFactory db) : IProjectMemberR
                 AddedAt = r.Utc("AddedAt")
             });
         }
+        return list;
+    }
+
+    public async Task<IEnumerable<UserOption>> GetAssignableAsync(int projectId)
+    {
+        const string sql = @"
+            SELECT u.UserId, u.DisplayName, u.Username
+            FROM Users u
+            LEFT JOIN ProjectMembers m ON m.UserId = u.UserId AND m.ProjectId = @ProjectId
+            WHERE u.IsActive AND (u.Role = 'Admin' OR m.Role IN ('Contributor', 'Manager'))
+            ORDER BY u.DisplayName;";
+
+        var list = new List<UserOption>();
+        await using var conn = await db.OpenAsync();
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddInt("ProjectId", projectId);
+        await using var r = await cmd.ExecuteReaderAsync();
+        while (await r.ReadAsync()) list.Add(new UserOption(r.Int("UserId"), r.Str("DisplayName"), r.Str("Username")));
         return list;
     }
 

@@ -73,6 +73,14 @@ public class ProjectsController(
         return Ok(await projects.GetSuggestionsAsync(id));
     }
 
+    /// <summary>Who a ticket in this project may be assigned to. Any member can read it.</summary>
+    [HttpGet("{id:int}/assignees")]
+    public async Task<ActionResult<IEnumerable<UserOption>>> GetAssignees(int id)
+    {
+        if (await access.GetAsync(User, id) == ProjectAccess.None) return NotFoundProject(id);
+        return Ok(await members.GetAssignableAsync(id));
+    }
+
     // ---------- Members ----------
 
     [HttpGet("{id:int}/members")]
