@@ -12,6 +12,10 @@ public static class SqlExtensions
     public static void AddText(this NpgsqlParameterCollection p, string name, string? value) =>
         p.Add(new NpgsqlParameter(name, NpgsqlDbType.Text) { Value = (object?)value ?? DBNull.Value });
 
+    /// <summary>A text[] for `= ANY(@p)` filters. Null means "no filter", not "matches nothing".</summary>
+    public static void AddTextArray(this NpgsqlParameterCollection p, string name, string[]? values) =>
+        p.Add(new NpgsqlParameter(name, NpgsqlDbType.Array | NpgsqlDbType.Text) { Value = (object?)values ?? DBNull.Value });
+
     public static void AddBool(this NpgsqlParameterCollection p, string name, bool value) =>
         p.Add(new NpgsqlParameter(name, NpgsqlDbType.Boolean) { Value = value });
 

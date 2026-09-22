@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
     username     VARCHAR(50)  NOT NULL,
     displayname  VARCHAR(100) NOT NULL,
     passwordhash VARCHAR(200) NOT NULL,                 -- ASP.NET Core PasswordHasher (salted PBKDF2), never plain text
-    role         VARCHAR(20)  NOT NULL DEFAULT 'Member' CHECK (role IN ('Admin', 'Member')),
+    role         VARCHAR(20)  NOT NULL DEFAULT 'Tester' CHECK (role IN ('Admin', 'Developer', 'Tester')),
     isactive     BOOLEAN      NOT NULL DEFAULT TRUE,
     tokenversion INTEGER      NOT NULL DEFAULT 1,      -- bumped to sign the user out everywhere
     createdat    TIMESTAMPTZ  NOT NULL DEFAULT now()
@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS projects (
     projectname     VARCHAR(150) NOT NULL,
     projectcode     VARCHAR(10) NOT NULL,
     createdbyuserid INTEGER NULL REFERENCES users (userid),
+    -- Sample data for the "Continue as a guest" tour. Guests see only these; everyone else
+    -- sees only the rest. ProjectAccessService applies the same rule in code.
+    isdemo          BOOLEAN NOT NULL DEFAULT FALSE,
     createdat       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 -- The unique index on projectcode is created in the migration section at the end of this file:
@@ -81,7 +84,7 @@ CREATE TABLE IF NOT EXISTS tickets (
     title            VARCHAR(200) NOT NULL,
     description      TEXT NULL,                         -- HTML; pictures embedded as data URLs
     tickettype       VARCHAR(20) NOT NULL DEFAULT 'Bug'
-                     CHECK (tickettype IN ('Bug', 'Enhancement')),
+                     CHECK (tickettype IN ('Bug', 'Enhancement', 'Issue')),
     assignedtouserid INTEGER NULL REFERENCES users (userid),
     -- Who put the current assignee there: the creator, or whoever changed it last.
     assignedbyuserid INTEGER NULL REFERENCES users (userid),
@@ -158,12 +161,27 @@ ALTER TABLE tickets DROP CONSTRAINT IF EXISTS tickets_impact_check;
 ALTER TABLE tickets ADD CONSTRAINT tickets_impact_check
     CHECK (impact IN ('Low', 'Medium', 'High', 'Critical', 'Showstopper'));
 
--- Tickets gained a type (Bug / Enhancement) and a record of who assigned them.
+-- The single 'Member' role split into 'Developer' and 'Tester'. Neither carries any privilege
+-- of its own -- what a person may do still comes from their per-project membership -- so the
+-- old Members all become Testers and can be moved across one at a time.
+-- The rows are rewritten before the new constraint goes on, or it would reject them.
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+UPDATE users SET role = 'Tester' WHERE role NOT IN ('Admin', 'Developer', 'Tester');
+ALTER TABLE users ALTER COLUMN role SET DEFAULT 'Tester';
+ALTER TABLE users ADD CONSTRAINT users_role_check
+    CHECK (role IN ('Admin', 'Developer', 'Tester'));
+
+-- Projects gained a demo flag for the guest tour. Existing projects are real work, so they
+-- default to FALSE and stay invisible to guests until something marks them.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS isdemo BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE INDEX IF NOT EXISTS ix_projects_isdemo ON projects (isdemo);
+
+-- Tickets gained a type (Bug / Enhancement, later Issue) and a record of who assigned them.
 -- Existing rows become Bugs, which is what they all were.
 ALTER TABLE tickets ADD COLUMN IF NOT EXISTS tickettype VARCHAR(20) NOT NULL DEFAULT 'Bug';
 ALTER TABLE tickets DROP CONSTRAINT IF EXISTS tickets_tickettype_check;
 ALTER TABLE tickets ADD CONSTRAINT tickets_tickettype_check
-    CHECK (tickettype IN ('Bug', 'Enhancement'));
+    CHECK (tickettype IN ('Bug', 'Enhancement', 'Issue'));
 ALTER TABLE tickets ADD COLUMN IF NOT EXISTS assignedbyuserid INTEGER NULL REFERENCES users (userid);
 
 -- ---------- Project - Folder - Ticket ----------

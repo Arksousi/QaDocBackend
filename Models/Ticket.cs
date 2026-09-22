@@ -6,6 +6,9 @@ public static class TicketTypes
 {
     public const string Bug = "Bug";
     public const string Enhancement = "Enhancement";
+    public const string Issue = "Issue";
+
+    public const string Message = "Type must be Bug, Enhancement or Issue.";
 }
 
 public class Ticket
@@ -21,7 +24,7 @@ public class Ticket
     public string FolderCode { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string? Description { get; set; }
-    /// <summary>"Bug" or "Enhancement".</summary>
+    /// <summary>"Bug", "Enhancement" or "Issue".</summary>
     public string TicketType { get; set; } = TicketTypes.Bug;
     public int? AssignedToUserId { get; set; }
     public string? AssignedToName { get; set; }
@@ -81,7 +84,7 @@ public class SaveTicketRequest
     /// <summary>Null means unassigned. Must be an active user.</summary>
     public int? AssignedToUserId { get; set; }
 
-    [AllowedValues(TicketTypes.Bug, TicketTypes.Enhancement, ErrorMessage = "Type must be Bug or Enhancement.")]
+    [AllowedValues(TicketTypes.Bug, TicketTypes.Enhancement, TicketTypes.Issue, ErrorMessage = TicketTypes.Message)]
     public string TicketType { get; set; } = TicketTypes.Bug;
 
     [AllowedValues("Open", "In Progress", "Resolved", "Retest", "Closed", ErrorMessage = "State must be Open, In Progress, Resolved, Retest or Closed.")]

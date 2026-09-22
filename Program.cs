@@ -10,7 +10,7 @@ using QaDocBackend.Infrastructure;
 using QaDocBackend.Models;
 using QaDocBackend.Repositories;
 var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddControllers();
+builder.Services.AddControllers(options => options.Filters.Add<GuestReadOnlyFilter>());
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -74,6 +74,10 @@ builder.Services
             OnTokenValidated = async context =>
             {
                 var principal = context.Principal!;
+                // A guest token names no account, so there is nothing to re-check. It carries no
+                // role either: GuestReadOnlyFilter and IProjectAccessService decide what it reaches.
+                if (principal.IsGuest()) return;
+
                 var users = context.HttpContext.RequestServices.GetRequiredService<IUserRepository>();
                 bool validId = int.TryParse(principal.FindFirstValue(JwtRegisteredClaimNames.Sub), out int userId);
                 var user = validId ? await users.GetByIdAsync(userId) : null;

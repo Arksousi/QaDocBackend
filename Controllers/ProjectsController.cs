@@ -17,12 +17,12 @@ public class ProjectsController(
 {
     [HttpGet]
     public async Task<ActionResult<IEnumerable<Project>>> GetAll() =>
-        Ok(await projects.GetAllAsync(User.GetUserId(), User.IsInRole(Roles.Admin)));
+        Ok(await projects.GetAllAsync(User.AsViewer()));
 
     /// <summary>Projects with the most recent ticket activity (Project Menu).</summary>
     [HttpGet("recent")]
     public async Task<ActionResult<IEnumerable<Project>>> GetRecent([FromQuery] int top = 5) =>
-        Ok(await projects.GetRecentAsync(Math.Clamp(top, 1, 50), User.GetUserId(), User.IsInRole(Roles.Admin)));
+        Ok(await projects.GetRecentAsync(Math.Clamp(top, 1, 50), User.AsViewer()));
 
     [HttpGet("{id:int}")]
     public async Task<ActionResult<Project>> GetById(int id)
@@ -49,6 +49,22 @@ public class ProjectsController(
         return CreatedAtAction(nameof(GetById), new { id = newId }, new { id = newId });
     }
 
+    // ---------- Sample data for the guest tour ----------
+    // Demo projects are invisible to every signed-in account, so without these two endpoints the
+    // flag could only ever be set again with raw SQL. Admin only, and deliberately separate from
+    // the normal project list: marking a project as sample data takes it out of everyone's way.
+
+    /// <summary>The projects "Continue as a guest" shows.</summary>
+    [Authorize(Roles = Roles.Admin)]
+    [HttpGet("demo")]
+    public async Task<ActionResult<IEnumerable<Project>>> GetDemo() => Ok(await projects.GetDemoAsync());
+
+    /// <summary>Moves a project into the guest tour, or brings it back into the real workspace.</summary>
+    [Authorize(Roles = Roles.Admin)]
+    [HttpPut("{id:int}/demo")]
+    public async Task<ActionResult> SetDemo(int id, [FromBody] SetDemoRequest request) =>
+        await projects.SetDemoAsync(id, request.IsDemo) ? NoContent() : NotFoundProject(id);
+
     /// <summary>Deletes the project and every ticket in it. Admin only; there is no undo.</summary>
     [Authorize(Roles = Roles.Admin)]
     [HttpDelete("{id:int}")]
@@ -57,13 +73,27 @@ public class ProjectsController(
 
     /// <summary>Ticket Viewer list. Filters are optional; sorted by newest activity.</summary>
     [HttpGet("{id:int}/tickets")]
+    /// <remarks>
+    /// "state", "type" and "tag" may each be repeated (?state=Open&amp;state=Retest) to match any of
+    /// several; a single value still works, so an older client keeps behaving as before.
+    /// </remarks>
     public async Task<ActionResult<IEnumerable<Ticket>>> GetTickets(
-        int id, [FromQuery] int? folderId, [FromQuery] string? search, [FromQuery] string? state,
-        [FromQuery] string? type, [FromQuery] string? tag, [FromQuery] int? assignedTo)
+        int id, [FromQuery] int? folderId, [FromQuery] string? search, [FromQuery] string[]? state,
+        [FromQuery] string[]? type, [FromQuery] string[]? tag, [FromQuery] int? assignedTo)
     {
         if (await access.GetAsync(User, id) == ProjectAccess.None) return NotFoundProject(id);
-        return Ok(await tickets.GetByProjectAsync(id, folderId, search, state, type, tag, assignedTo));
+
+        return Ok(await tickets.GetByProjectAsync(
+            id, folderId, search, Picked(state), Picked(type), Picked(tag), assignedTo));
     }
+
+    /// <summary>Blank entries dropped and duplicates collapsed, so a padded query string cannot widen the filter.</summary>
+    private static string[] Picked(string[]? values) =>
+        (values ?? [])
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
 
     /// <summary>Tags already used in the project, for autocomplete.</summary>
     [HttpGet("{id:int}/suggestions")]

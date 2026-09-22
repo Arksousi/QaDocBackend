@@ -59,10 +59,21 @@ public class AuthController(IUserRepository users, IPasswordHasher<UserRecord> h
         return Ok(tokens.CreateToken(user));
     }
 
+    /// <summary>
+    /// "Continue as a guest": a read-only tour of the demo projects, with no account and nothing
+    /// stored. Anonymous by design — that is the whole point of the button.
+    /// </summary>
+    [AllowAnonymous]
+    [HttpPost("guest")]
+    public ActionResult<LoginResponse> Guest() => Ok(tokens.CreateGuestToken());
+
     /// <summary>The signed-in user's profile (also used to restore a session on page load).</summary>
     [HttpGet("me")]
     public async Task<ActionResult<User>> Me()
     {
+        // A guest has no row to look up; the profile is invented from the token.
+        if (User.IsGuest()) return Ok(GuestUser.Public());
+
         var user = await users.GetByIdAsync(User.GetUserId());
         return user == null ? Unauthorized() : Ok(ToPublic(user));
     }
@@ -84,6 +95,6 @@ public class AuthController(IUserRepository users, IPasswordHasher<UserRecord> h
     internal static User ToPublic(User u) => new()
     {
         UserId = u.UserId, Username = u.Username, DisplayName = u.DisplayName,
-        Role = u.Role, IsActive = u.IsActive, CreatedAt = u.CreatedAt
+        Role = u.Role, IsActive = u.IsActive, IsGuest = false, CreatedAt = u.CreatedAt
     };
 }

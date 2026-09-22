@@ -13,7 +13,12 @@ public class UsersController(IUserRepository users, IPasswordHasher<UserRecord> 
 {
     /// <summary>Active users for the "Assigned To" picker. Any signed-in user.</summary>
     [HttpGet("options")]
-    public async Task<ActionResult<IEnumerable<UserOption>>> Options() => Ok(await users.GetActiveOptionsAsync());
+    public async Task<ActionResult<IEnumerable<UserOption>>> Options()
+    {
+        // Guests are strangers: the staff list is not part of the tour.
+        if (User.IsGuest()) return Forbid();
+        return Ok(await users.GetActiveOptionsAsync());
+    }
 
     [Authorize(Roles = Roles.Admin)]
     [HttpGet]

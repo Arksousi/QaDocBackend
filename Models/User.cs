@@ -2,10 +2,18 @@ using System.ComponentModel.DataAnnotations;
 
 namespace QaDocBackend.Models;
 
+/// <summary>
+/// What someone is across the whole app. Only Admin carries privileges of its own (managing
+/// users, deleting projects and tickets); Developer and Tester are the same to the API, and
+/// what either may do on a given project comes from <see cref="ProjectRoles"/>.
+/// </summary>
 public static class Roles
 {
     public const string Admin = "Admin";
-    public const string Member = "Member";
+    public const string Developer = "Developer";
+    public const string Tester = "Tester";
+
+    public const string Message = "Role must be Admin, Developer or Tester.";
 }
 
 public class User
@@ -13,8 +21,10 @@ public class User
     public int UserId { get; set; }
     public string Username { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
-    public string Role { get; set; } = Roles.Member;
+    public string Role { get; set; } = Roles.Tester;
     public bool IsActive { get; set; } = true;
+    /// <summary>True only for the invented guest of a "Continue as a guest" session; never stored.</summary>
+    public bool IsGuest { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 
@@ -50,8 +60,8 @@ public class CreateUserRequest
     [Required, StringLength(128, MinimumLength = 8, ErrorMessage = "Password must be at least 8 characters.")]
     public string Password { get; set; } = string.Empty;
 
-    [AllowedValues(Roles.Admin, Roles.Member, ErrorMessage = "Role must be Admin or Member.")]
-    public string Role { get; set; } = Roles.Member;
+    [AllowedValues(Roles.Admin, Roles.Developer, Roles.Tester, ErrorMessage = Roles.Message)]
+    public string Role { get; set; } = Roles.Tester;
 }
 
 public class UpdateUserRequest
@@ -59,8 +69,8 @@ public class UpdateUserRequest
     [Required, StringLength(100, MinimumLength = 1)]
     public string DisplayName { get; set; } = string.Empty;
 
-    [AllowedValues(Roles.Admin, Roles.Member, ErrorMessage = "Role must be Admin or Member.")]
-    public string Role { get; set; } = Roles.Member;
+    [AllowedValues(Roles.Admin, Roles.Developer, Roles.Tester, ErrorMessage = Roles.Message)]
+    public string Role { get; set; } = Roles.Tester;
 
     public bool IsActive { get; set; } = true;
 }

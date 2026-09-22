@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("QaDocBackend")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ee5758462e23d9c2f4f7baaf6d53ab123377331f")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ce1353f3d4152fb2f86d0697410b613547625e4b")]
 [assembly: System.Reflection.AssemblyProductAttribute("QaDocBackend")]
 [assembly: System.Reflection.AssemblyTitleAttribute("QaDocBackend")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

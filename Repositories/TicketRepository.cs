@@ -7,8 +7,12 @@ namespace QaDocBackend.Repositories;
 
 public interface ITicketRepository
 {
-    /// <summary>Tickets in a project, optionally narrowed to one folder.</summary>
-    Task<IEnumerable<Ticket>> GetByProjectAsync(int projectId, int? folderId, string? search, string? state, string? type, string? tag, int? assignedToUserId);
+    /// <summary>
+    /// Ticket Viewer list, optionally narrowed to one folder. <paramref name="states"/>,
+    /// <paramref name="types"/> and <paramref name="tags"/> are each an OR set within themselves and
+    /// AND-ed with each other; null or empty means that field is not filtered at all.
+    /// </summary>
+    Task<IEnumerable<Ticket>> GetByProjectAsync(int projectId, int? folderId, string? search, string[]? states, string[]? types, string[]? tags, int? assignedToUserId);
     Task<Ticket?> GetByIdAsync(int ticketId);
     Task<int> CreateAsync(SaveTicketRequest request, int userId);
     Task<UpdateOutcome> UpdateAsync(int ticketId, SaveTicketRequest request, int userId);
@@ -41,16 +45,18 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
         LEFT JOIN Users ub ON ub.UserId = t.UpdatedByUserId";
 
     public async Task<IEnumerable<Ticket>> GetByProjectAsync(
-        int projectId, int? folderId, string? search, string? state, string? type, string? tag, int? assignedToUserId)
+        int projectId, int? folderId, string? search, string[]? states, string[]? types, string[]? tags, int? assignedToUserId)
     {
         string sql = $@"
             {TicketSelect}
             WHERE t.ProjectId = @ProjectId
               AND (@FolderId::int IS NULL OR t.FolderId = @FolderId)
-              AND (@State::text IS NULL OR t.State = @State)
-              AND (@Type::text IS NULL OR t.TicketType = @Type)
+              -- Nothing ticked means no filter at all, the same as ticking every one. A ticket
+              -- carrying any one of the ticked tags matches; it does not need all of them.
+              AND (@States::text[] IS NULL OR t.State = ANY(@States))
+              AND (@Types::text[] IS NULL OR t.TicketType = ANY(@Types))
               AND (@AssignedTo::int IS NULL OR t.AssignedToUserId = @AssignedTo)
-              AND (@Tag::text IS NULL OR EXISTS (SELECT 1 FROM TicketTags tt WHERE tt.TicketId = t.TicketId AND lower(tt.Tag) = lower(@Tag)))
+              AND (@Tags::text[] IS NULL OR EXISTS (SELECT 1 FROM TicketTags tt WHERE tt.TicketId = t.TicketId AND lower(tt.Tag) = ANY(@Tags)))
               AND (@Search::text IS NULL
                    OR t.Title ILIKE '%' || @Search || '%'
                    OR a.DisplayName ILIKE '%' || @Search || '%'
@@ -67,10 +73,11 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
         {
             cmd.Parameters.AddInt("ProjectId", projectId);
             cmd.Parameters.AddInt("FolderId", folderId);
-            cmd.Parameters.AddText("State", string.IsNullOrWhiteSpace(state) ? null : state);
-            cmd.Parameters.AddText("Type", string.IsNullOrWhiteSpace(type) ? null : type);
+            cmd.Parameters.AddTextArray("States", states is { Length: > 0 } ? states : null);
+            cmd.Parameters.AddTextArray("Types", types is { Length: > 0 } ? types : null);
             cmd.Parameters.AddInt("AssignedTo", assignedToUserId);
-            cmd.Parameters.AddText("Tag", string.IsNullOrWhiteSpace(tag) ? null : tag.Trim());
+            // Lowered here rather than in SQL so the comparison stays sargable against ANY().
+            cmd.Parameters.AddTextArray("Tags", tags is { Length: > 0 } ? [.. tags.Select(t => t.Trim().ToLowerInvariant())] : null);
             cmd.Parameters.AddText("Search", searchText == null ? null : SqlExtensions.EscapeLike(searchText));
             // "#57" and "57" both find ticket 57
             cmd.Parameters.AddText("SearchId", searchText?.TrimStart('#'));

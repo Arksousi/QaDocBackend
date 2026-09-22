@@ -22,6 +22,12 @@ public class Project
     public string? MyRole { get; set; }
 }
 
+/// <summary>
+/// Who is asking for a list of projects. A guest is shown the demo projects and a real account is
+/// shown the real ones, so the two can never appear in the same list.
+/// </summary>
+public readonly record struct Viewer(int UserId, bool IsAdmin, bool IsGuest);
+
 public class CreateProjectRequest
 {
     [Required, StringLength(150, MinimumLength = 1)]
@@ -29,6 +35,12 @@ public class CreateProjectRequest
 
     [Required, StringLength(Codes.MaxLength, MinimumLength = 1)]
     public string ProjectCode { get; set; } = string.Empty;
+}
+
+/// <summary>Body for moving a project between the guest tour and the real workspace.</summary>
+public class SetDemoRequest
+{
+    public bool IsDemo { get; set; }
 }
 
 /// <summary>Values already used in a project, offered as suggestions in the UI.</summary>
