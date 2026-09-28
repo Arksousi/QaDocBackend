@@ -9,6 +9,9 @@ public interface IUserRepository
     Task<bool> AnyUsersAsync();
     Task<IEnumerable<User>> GetAllAsync();
     Task<IEnumerable<UserOption>> GetActiveOptionsAsync();
+    /// <summary>Every active person's load, fullest first against their limit, for the Users Dashboard.</summary>
+    Task<IEnumerable<UserWorkload>> GetWorkloadAsync();
+    Task<bool> SetTicketLimitAsync(int userId, int? ticketLimit);
     Task<UserRecord?> GetByIdAsync(int userId);
     Task<UserRecord?> GetByUsernameAsync(string username);
     Task<int> CreateAsync(CreateUserRequest request, string passwordHash);
@@ -25,7 +28,7 @@ public interface IUserRepository
 public class UserRepository(ISqlConnectionFactory db) : IUserRepository
 {
     private const string SelectUser =
-        "SELECT UserId, Username, DisplayName, PasswordHash, Role, IsActive, TokenVersion, CreatedAt FROM Users";
+        "SELECT UserId, Username, DisplayName, PasswordHash, Role, IsActive, TicketLimit, TokenVersion, CreatedAt FROM Users";
 
     public async Task<bool> AnyUsersAsync()
     {
@@ -48,10 +51,45 @@ public class UserRepository(ISqlConnectionFactory db) : IUserRepository
     {
         var list = new List<UserOption>();
         await using var conn = await db.OpenAsync();
-        await using var cmd = new NpgsqlCommand("SELECT UserId, DisplayName, Username FROM Users WHERE IsActive ORDER BY DisplayName;", conn);
+        await using var cmd = new NpgsqlCommand($@"
+            SELECT u.UserId, u.DisplayName, u.Username, u.TicketLimit, {Workload.OpenTicketsOf("u.UserId")} AS OpenTickets
+            FROM Users u WHERE u.IsActive ORDER BY u.DisplayName;", conn);
         await using var r = await cmd.ExecuteReaderAsync();
-        while (await r.ReadAsync()) list.Add(new UserOption(r.Int("UserId"), r.Str("DisplayName"), r.Str("Username")));
+        while (await r.ReadAsync()) list.Add(MapOption(r));
         return list;
+    }
+
+    public async Task<IEnumerable<UserWorkload>> GetWorkloadAsync()
+    {
+        // Ordered by how full they are, so whoever needs attention is at the top; people with no
+        // limit follow, busiest first.
+        string sql = $@"
+            SELECT x.* FROM (
+                SELECT u.UserId, u.DisplayName, u.Username, u.Role, u.TicketLimit,
+                       {Workload.OpenTicketsOf("u.UserId")} AS OpenTickets
+                FROM Users u WHERE u.IsActive) x
+            ORDER BY (x.TicketLimit IS NULL), x.OpenTickets::numeric / NULLIF(x.TicketLimit, 0) DESC NULLS LAST,
+                     x.OpenTickets DESC, x.DisplayName;";
+
+        var list = new List<UserWorkload>();
+        await using var conn = await db.OpenAsync();
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        await using var r = await cmd.ExecuteReaderAsync();
+        while (await r.ReadAsync())
+        {
+            list.Add(new UserWorkload(r.Int("UserId"), r.Str("DisplayName"), r.Str("Username"), r.Str("Role"),
+                r.Int("OpenTickets"), r.NInt("TicketLimit")));
+        }
+        return list;
+    }
+
+    public async Task<bool> SetTicketLimitAsync(int userId, int? ticketLimit)
+    {
+        await using var conn = await db.OpenAsync();
+        await using var cmd = new NpgsqlCommand("UPDATE Users SET TicketLimit = @TicketLimit WHERE UserId = @UserId;", conn);
+        cmd.Parameters.AddInt("UserId", userId);
+        cmd.Parameters.AddInt("TicketLimit", ticketLimit);
+        return await cmd.ExecuteNonQueryAsync() > 0;
     }
 
     public async Task<UserRecord?> GetByIdAsync(int userId)
@@ -76,13 +114,14 @@ public class UserRepository(ISqlConnectionFactory db) : IUserRepository
     public async Task<int> CreateAsync(CreateUserRequest request, string passwordHash)
     {
         const string sql = @"
-            INSERT INTO Users (Username, DisplayName, PasswordHash, Role)
-            VALUES (@Username, @DisplayName, @PasswordHash, @Role)
+            INSERT INTO Users (Username, DisplayName, PasswordHash, Role, TicketLimit)
+            VALUES (@Username, @DisplayName, @PasswordHash, @Role, @TicketLimit)
             RETURNING UserId;";
         await using var conn = await db.OpenAsync();
         await using var cmd = new NpgsqlCommand(sql, conn);
         AddCreateParams(cmd, request, passwordHash);
         cmd.Parameters.AddText("Role", request.Role);
+        cmd.Parameters.AddInt("TicketLimit", request.TicketLimit);
         return (int)(await cmd.ExecuteScalarAsync())!;
     }
 
@@ -112,7 +151,7 @@ public class UserRepository(ISqlConnectionFactory db) : IUserRepository
         // Deactivating also revokes existing tokens.
         const string sql = @"
             UPDATE Users
-            SET DisplayName = @DisplayName, Role = @Role,
+            SET DisplayName = @DisplayName, Role = @Role, TicketLimit = @TicketLimit,
                 TokenVersion = CASE WHEN IsActive AND NOT @IsActive THEN TokenVersion + 1 ELSE TokenVersion END,
                 IsActive = @IsActive
             WHERE UserId = @UserId;";
@@ -122,6 +161,7 @@ public class UserRepository(ISqlConnectionFactory db) : IUserRepository
         cmd.Parameters.AddText("DisplayName", request.DisplayName.Trim());
         cmd.Parameters.AddText("Role", request.Role);
         cmd.Parameters.AddBool("IsActive", request.IsActive);
+        cmd.Parameters.AddInt("TicketLimit", request.TicketLimit);
         return await cmd.ExecuteNonQueryAsync() > 0;
     }
 
@@ -165,7 +205,12 @@ public class UserRepository(ISqlConnectionFactory db) : IUserRepository
         PasswordHash = r.Str("PasswordHash"),
         Role = r.Str("Role"),
         IsActive = r.Bool("IsActive"),
+        TicketLimit = r.NInt("TicketLimit"),
         TokenVersion = r.Int("TokenVersion"),
         CreatedAt = r.Utc("CreatedAt")
     };
+
+    /// <summary>Shared with ProjectMemberRepository's assignee list: both feed the same picker.</summary>
+    internal static UserOption MapOption(NpgsqlDataReader r) =>
+        new(r.Int("UserId"), r.Str("DisplayName"), r.Str("Username"), r.Int("OpenTickets"), r.NInt("TicketLimit"));
 }

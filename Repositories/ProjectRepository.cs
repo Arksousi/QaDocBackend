@@ -16,7 +16,7 @@ public interface IProjectRepository
     Task<IEnumerable<Project>> GetDemoAsync();
     /// <summary>Moves a project between the guest tour and the real workspace.</summary>
     Task<bool> SetDemoAsync(int projectId, bool isDemo);
-    /// <summary>Creates the project and makes the creator its first Manager, in one transaction.</summary>
+    /// <summary>Creates the project and makes the creator its first Contributor, in one transaction.</summary>
     Task<int> CreateAsync(CreateProjectRequest request, int userId);
     Task<bool> DeleteAsync(int projectId);
     Task<ProjectSuggestions> GetSuggestionsAsync(int projectId);
@@ -38,7 +38,8 @@ public class ProjectRepository(ISqlConnectionFactory db) : IProjectRepository
 
     /// <summary>
     /// Same shape as SelectProjects, but joined to the caller's membership so one query both filters
-    /// the list and reports the role. Admins see every project and are reported as Manager.
+    /// the list and reports the role. Admins see every project and are reported as Manager, and so
+    /// is a Leader on a project they contribute to -- the same answer ProjectAccessService gives.
     /// The IsDemo test is the same seam as in ProjectAccessService: a guest gets the demo projects
     /// and nobody else does, so neither list can leak a project from the other world.
     /// </summary>
@@ -46,7 +47,8 @@ public class ProjectRepository(ISqlConnectionFactory db) : IProjectRepository
         SELECT p.ProjectId, p.ProjectName, p.ProjectCode, p.CreatedAt, u.DisplayName AS CreatedByName,
                s.TicketCount, s.OpenTicketCount,
                COALESCE(s.LastTicketActivity, p.CreatedAt) AS LastActivity,
-               CASE WHEN @IsGuest THEN 'Viewer' WHEN @IsAdmin THEN 'Manager' ELSE me.Role END AS MyRole
+               CASE WHEN @IsGuest THEN 'Viewer' WHEN @IsAdmin THEN 'Manager'
+                    WHEN @IsLeader AND me.Role = 'Contributor' THEN 'Manager' ELSE me.Role END AS MyRole
         FROM Projects p
         LEFT JOIN Users u ON u.UserId = p.CreatedByUserId
         LEFT JOIN ProjectMembers me ON me.ProjectId = p.ProjectId AND me.UserId = @UserId
@@ -123,13 +125,14 @@ public class ProjectRepository(ISqlConnectionFactory db) : IProjectRepository
             projectId = (int)(await cmd.ExecuteScalarAsync())!;
         }
 
-        // Without this the creator would immediately lose sight of their own project.
+        // Without this the creator would immediately lose sight of their own project. Only Admins
+        // and Leaders create projects, so as a Contributor the creator also manages it.
         await using (var cmd = new NpgsqlCommand(
             "INSERT INTO ProjectMembers (ProjectId, UserId, Role) VALUES (@ProjectId, @UserId, @Role);", conn, tx))
         {
             cmd.Parameters.AddInt("ProjectId", projectId);
             cmd.Parameters.AddInt("UserId", userId);
-            cmd.Parameters.AddText("Role", ProjectRoles.Manager);
+            cmd.Parameters.AddText("Role", ProjectRoles.Contributor);
             await cmd.ExecuteNonQueryAsync();
         }
 
@@ -178,6 +181,7 @@ public class ProjectRepository(ISqlConnectionFactory db) : IProjectRepository
         cmd.Parameters.AddInt("UserId", viewer.UserId);
         cmd.Parameters.AddBool("IsAdmin", viewer.IsAdmin);
         cmd.Parameters.AddBool("IsGuest", viewer.IsGuest);
+        cmd.Parameters.AddBool("IsLeader", viewer.IsLeader);
     }
 
     private static async Task<List<Project>> ReadProjectsAsync(NpgsqlCommand cmd)

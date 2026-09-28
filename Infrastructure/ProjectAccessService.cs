@@ -6,7 +6,7 @@ namespace QaDocBackend.Infrastructure;
 
 public interface IProjectAccessService
 {
-    /// <summary>What the signed-in user may do in this project. Global Admins always get Manager.</summary>
+    /// <summary>What the signed-in user may do in this project. Admins always get Manager; so does a Leader who is a Contributor.</summary>
     Task<ProjectAccess> GetAsync(ClaimsPrincipal user, int projectId);
 
     /// <summary>
@@ -36,7 +36,7 @@ public class ProjectAccessService(
         if (isDemo) return ProjectAccess.None;
 
         if (user.IsInRole(Roles.Admin)) return ProjectAccess.Manager;
-        return await FromMembershipAsync(user.GetUserId(), projectId);
+        return await FromMembershipAsync(user.GetUserId(), projectId, user.IsInRole(Roles.Leader));
     }
 
     public async Task<ProjectAccess> GetForUserAsync(int userId, int projectId)
@@ -45,14 +45,17 @@ public class ProjectAccessService(
         if (user is not { IsActive: true }) return ProjectAccess.None;
         if (await projects.IsDemoAsync(projectId) is not false) return ProjectAccess.None;
         if (user.Role == Roles.Admin) return ProjectAccess.Manager;
-        return await FromMembershipAsync(userId, projectId);
+        return await FromMembershipAsync(userId, projectId, user.Role == Roles.Leader);
     }
 
-    private async Task<ProjectAccess> FromMembershipAsync(int userId, int projectId) =>
+    /// <summary>
+    /// A Leader manages the projects they contribute to. Leading alone is not enough: a Leader added
+    /// as a Viewer is there to read, and stays read-only.
+    /// </summary>
+    private async Task<ProjectAccess> FromMembershipAsync(int userId, int projectId, bool isLeader) =>
         await members.GetRoleAsync(projectId, userId) switch
         {
-            ProjectRoles.Manager => ProjectAccess.Manager,
-            ProjectRoles.Contributor => ProjectAccess.Contributor,
+            ProjectRoles.Contributor => isLeader ? ProjectAccess.Manager : ProjectAccess.Contributor,
             ProjectRoles.Viewer => ProjectAccess.Viewer,
             _ => ProjectAccess.None
         };

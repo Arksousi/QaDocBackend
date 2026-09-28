@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using QaDocBackend.Infrastructure;
 using QaDocBackend.Models;
@@ -12,6 +12,7 @@ public class TicketsController(
     ITicketRepository tickets,
     IFolderRepository folders,
     IUserRepository users,
+    IProjectMemberRepository members,
     IProjectAccessService access) : ControllerBase
 {
     private const int MaxTags = 20;
@@ -39,8 +40,9 @@ public class TicketsController(
         if (level == ProjectAccess.None)
             return ValidationProblem(detail: $"Folder #{request.FolderId} does not exist.");
         if (level < ProjectAccess.Contributor) return Forbid();
-        if (await ValidateAsync(request, folder.ProjectId, currentAssignee: null) is { } problem) return problem;
+        if (await ValidateAsync(request, folder.ProjectId, current: [], level) is { } problem) return problem;
 
+        await JoinAssigneesAsync(request, folder.ProjectId, current: [], level);
         int newId = await tickets.CreateAsync(request, User.GetUserId());
         return CreatedAtAction(nameof(GetById), new { id = newId }, new { id = newId });
     }
@@ -55,8 +57,10 @@ public class TicketsController(
         var level = await access.GetAsync(User, existing.ProjectId);
         if (level == ProjectAccess.None) return NotFoundTicket(id);
         if (level < ProjectAccess.Contributor) return Forbid();
-        if (await ValidateAsync(request, existing.ProjectId, existing.AssignedToUserId) is { } problem) return problem;
+        var current = existing.Assignees.Select(a => a.UserId).ToList();
+        if (await ValidateAsync(request, existing.ProjectId, current, level) is { } problem) return problem;
 
+        await JoinAssigneesAsync(request, existing.ProjectId, current, level);
         await tickets.UpdateAsync(id, request, User.GetUserId());
         return NoContent();
     }
@@ -80,23 +84,45 @@ public class TicketsController(
         return comment == null ? NotFoundTicket(id) : Ok(comment);
     }
 
+    /// <summary>
+    /// Assigning a ticket to someone outside the project, or to one of its Viewers, makes them a
+    /// Contributor so they can work on it. Only for those who manage the project (a Leader who
+    /// contributes, or an Admin) -- the same people who could have added them from Members.
+    /// </summary>
+    private async Task JoinAssigneesAsync(SaveTicketRequest request, int projectId, List<int> current, ProjectAccess level)
+    {
+        if (level < ProjectAccess.Manager) return;
+        foreach (int assignee in (request.AssignedToUserIds ?? []).Except(current))
+        {
+            if (await access.GetForUserAsync(assignee, projectId) < ProjectAccess.Contributor)
+                await members.SaveAsync(projectId, assignee, ProjectRoles.Contributor);
+        }
+    }
+
     private NotFoundObjectResult NotFoundTicket(int id) => NotFound(new { message = $"Ticket #{id} not found." });
 
-    /// <summary>Checks title and assignee, and normalises tags (trimmed, no blanks, case-insensitive distinct).</summary>
-    private async Task<ActionResult?> ValidateAsync(SaveTicketRequest request, int projectId, int? currentAssignee)
+    /// <summary>Checks title and assignees, and normalises tags (trimmed, no blanks, case-insensitive distinct).</summary>
+    private async Task<ActionResult?> ValidateAsync(SaveTicketRequest request, int projectId, List<int> current, ProjectAccess level)
     {
         if (string.IsNullOrWhiteSpace(request.Title))
             return ValidationProblem(detail: "Title is required.");
 
-        // A ticket can only be given to somebody who actually works on the project: Contributor or
-        // Manager, or a global Admin. Keeping an assignee who has since lost access or been
-        // deactivated is allowed, so old tickets stay editable; newly assigning one is not.
-        if (request.AssignedToUserId is int assignee && assignee != currentAssignee)
+        // Not sent means unchanged (see SaveTicketRequest); on a new ticket, current is empty anyway.
+        request.AssignedToUserIds = (request.AssignedToUserIds ?? current).Distinct().ToList();
+        if (request.AssignedToUserIds.Count > SaveTicketRequest.MaxAssignees)
+            return ValidationProblem(detail: $"A ticket can be assigned to at most {SaveTicketRequest.MaxAssignees} people.");
+
+        // A ticket can only be given to somebody who actually works on the project: a Contributor,
+        // or a global Admin. Only people being added are checked: someone already on it who has
+        // since lost access or been deactivated stays, so old tickets remain editable.
+        // Someone who manages the project may add anyone active: JoinAssigneesAsync makes them a
+        // Contributor first, so the rule still holds once the save lands.
+        foreach (int assignee in request.AssignedToUserIds.Except(current))
         {
             if (!await users.IsActiveUserAsync(assignee))
-                return ValidationProblem(detail: "Assigned To must be an active user.");
-            if (await access.GetForUserAsync(assignee, projectId) < ProjectAccess.Contributor)
-                return ValidationProblem(detail: "Assigned To must be a Contributor or Manager on this project.");
+                return ValidationProblem(detail: "Everyone assigned must be an active user.");
+            if (level < ProjectAccess.Manager && await access.GetForUserAsync(assignee, projectId) < ProjectAccess.Contributor)
+                return ValidationProblem(detail: "Everyone assigned must be a Contributor on this project.");
         }
 
         request.Tags = (request.Tags ?? [])

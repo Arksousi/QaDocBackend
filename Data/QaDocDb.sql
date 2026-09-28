@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
     username     VARCHAR(50)  NOT NULL,
     displayname  VARCHAR(100) NOT NULL,
     passwordhash VARCHAR(200) NOT NULL,                 -- ASP.NET Core PasswordHasher (salted PBKDF2), never plain text
-    role         VARCHAR(20)  NOT NULL DEFAULT 'Tester' CHECK (role IN ('Admin', 'Developer', 'Tester')),
+    role         VARCHAR(20)  NOT NULL DEFAULT 'Tester' CHECK (role IN ('Admin', 'Leader', 'Developer', 'Tester')),
     isactive     BOOLEAN      NOT NULL DEFAULT TRUE,
     tokenversion INTEGER      NOT NULL DEFAULT 1,      -- bumped to sign the user out everywhere
     createdat    TIMESTAMPTZ  NOT NULL DEFAULT now()
@@ -58,14 +58,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_folders_project_code ON folders (projectid,
 -- access at all; global Admins bypass this table entirely.
 --   Viewer      - read tickets, post comments
 --   Contributor - also create, edit and assign tickets
---   Manager     - also add and remove this project's members
+-- Managing the project (members, folders) is not stored: it belongs to a Contributor whose
+-- account role is Leader, and to Admins. ProjectAccessService works it out.
 -- Deliberately NOT backfilled: existing projects start with no members, so only Admins can
 -- reach them until someone is added.
 CREATE TABLE IF NOT EXISTS projectmembers (
     projectid INTEGER NOT NULL REFERENCES projects (projectid) ON DELETE CASCADE,
     userid    INTEGER NOT NULL REFERENCES users (userid) ON DELETE CASCADE,
     role      VARCHAR(20) NOT NULL DEFAULT 'Viewer'
-              CHECK (role IN ('Viewer', 'Contributor', 'Manager')),
+              CHECK (role IN ('Viewer', 'Contributor')),
     addedat   TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (projectid, userid)
 );
@@ -85,8 +86,9 @@ CREATE TABLE IF NOT EXISTS tickets (
     description      TEXT NULL,                         -- HTML; pictures embedded as data URLs
     tickettype       VARCHAR(20) NOT NULL DEFAULT 'Bug'
                      CHECK (tickettype IN ('Bug', 'Enhancement', 'Issue')),
+    -- Superseded by ticketassignees (a ticket can have several people) and no longer written.
+    -- Kept for one release so the previous API can still be rolled back to; drop them after.
     assignedtouserid INTEGER NULL REFERENCES users (userid),
-    -- Who put the current assignee there: the creator, or whoever changed it last.
     assignedbyuserid INTEGER NULL REFERENCES users (userid),
     state            VARCHAR(20) NOT NULL DEFAULT 'Open'
                      CHECK (state IN ('Open', 'In Progress', 'Resolved', 'Retest', 'Closed')),
@@ -149,6 +151,20 @@ CREATE TABLE IF NOT EXISTS ticketattachments (
 );
 CREATE INDEX IF NOT EXISTS ix_ticketattachments_project ON ticketattachments (projectid);
 
+-- ---------- Notifications ----------
+-- "X assigned a ticket to you", shown in the app's bell. Only the pointers are stored: the key,
+-- title and project are joined in when read, so renaming a code never leaves a stale message.
+-- readat stays NULL until the person opens it or marks everything read.
+CREATE TABLE IF NOT EXISTS notifications (
+    notificationid INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    userid         INTEGER NOT NULL REFERENCES users (userid) ON DELETE CASCADE,
+    ticketid       INTEGER NOT NULL REFERENCES tickets (ticketid) ON DELETE CASCADE,
+    actoruserid    INTEGER NULL REFERENCES users (userid),
+    createdat      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    readat         TIMESTAMPTZ NULL
+);
+CREATE INDEX IF NOT EXISTS ix_notifications_user ON notifications (userid, createdat DESC);
+
 -- ============================================================
 -- Migrations for databases created by an earlier version.
 -- CREATE TABLE IF NOT EXISTS skips an existing table outright, so column and constraint
@@ -165,11 +181,27 @@ ALTER TABLE tickets ADD CONSTRAINT tickets_impact_check
 -- of its own -- what a person may do still comes from their per-project membership -- so the
 -- old Members all become Testers and can be moved across one at a time.
 -- The rows are rewritten before the new constraint goes on, or it would reject them.
+-- Later, 'Leader' joined: the one role besides Admin allowed to create projects. Nobody is
+-- moved into it here; an Admin promotes people from the Users page.
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
-UPDATE users SET role = 'Tester' WHERE role NOT IN ('Admin', 'Developer', 'Tester');
+UPDATE users SET role = 'Tester' WHERE role NOT IN ('Admin', 'Leader', 'Developer', 'Tester');
 ALTER TABLE users ALTER COLUMN role SET DEFAULT 'Tester';
 ALTER TABLE users ADD CONSTRAINT users_role_check
-    CHECK (role IN ('Admin', 'Developer', 'Tester'));
+    CHECK (role IN ('Admin', 'Leader', 'Developer', 'Tester'));
+
+-- The 'Manager' project role was retired: managing a project now comes from being a Leader
+-- who is a Contributor on it. Old Managers keep editing tickets as Contributors; those who
+-- should still manage need the Leader account role. Rows first, or the constraint rejects them.
+ALTER TABLE projectmembers DROP CONSTRAINT IF EXISTS projectmembers_role_check;
+UPDATE projectmembers SET role = 'Contributor' WHERE role NOT IN ('Viewer', 'Contributor');
+ALTER TABLE projectmembers ADD CONSTRAINT projectmembers_role_check
+    CHECK (role IN ('Viewer', 'Contributor'));
+
+-- Users gained an optional ticket limit: how many unfinished tickets they should hold at once,
+-- across every project. NULL means no limit. Only a guide -- the app warns, it never refuses.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS ticketlimit INTEGER NULL;
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_ticketlimit_check;
+ALTER TABLE users ADD CONSTRAINT users_ticketlimit_check CHECK (ticketlimit IS NULL OR ticketlimit BETWEEN 1 AND 100);
 
 -- Projects gained a demo flag for the guest tour. Existing projects are real work, so they
 -- default to FALSE and stay invisible to guests until something marks them.
@@ -250,3 +282,25 @@ ALTER TABLE tickets  ALTER COLUMN folderid SET NOT NULL;
 ALTER TABLE tickets  ALTER COLUMN sequence SET NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_tickets_folder_sequence ON tickets (folderid, sequence);
 CREATE INDEX IF NOT EXISTS ix_tickets_folder ON tickets (folderid);
+
+-- ---------- Ticket assignees (many per ticket) ----------
+-- assignedbyuserid is per person: whoever added them, which is who they answer to for it.
+-- Last in the file so every column it copies exists, however old the database.
+-- Created and back-filled in one guarded step: the copy from the old single-assignee column must
+-- happen exactly once. Were it re-run on every start, it would put back anyone removed since.
+DO $$
+BEGIN
+    IF to_regclass('ticketassignees') IS NULL THEN
+        CREATE TABLE ticketassignees (
+            ticketid         INTEGER NOT NULL REFERENCES tickets (ticketid) ON DELETE CASCADE,
+            userid           INTEGER NOT NULL REFERENCES users (userid) ON DELETE CASCADE,
+            assignedbyuserid INTEGER NULL REFERENCES users (userid),
+            assignedat       TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (ticketid, userid)
+        );
+        INSERT INTO ticketassignees (ticketid, userid, assignedbyuserid, assignedat)
+        SELECT ticketid, assignedtouserid, assignedbyuserid, activitydate
+        FROM tickets WHERE assignedtouserid IS NOT NULL;
+    END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS ix_ticketassignees_user ON ticketassignees (userid);

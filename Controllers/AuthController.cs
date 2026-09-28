@@ -95,6 +95,6 @@ public class AuthController(IUserRepository users, IPasswordHasher<UserRecord> h
     internal static User ToPublic(User u) => new()
     {
         UserId = u.UserId, Username = u.Username, DisplayName = u.DisplayName,
-        Role = u.Role, IsActive = u.IsActive, IsGuest = false, CreatedAt = u.CreatedAt
+        Role = u.Role, IsActive = u.IsActive, IsGuest = false, TicketLimit = u.TicketLimit, CreatedAt = u.CreatedAt
     };
 }

@@ -26,10 +26,8 @@ public class Ticket
     public string? Description { get; set; }
     /// <summary>"Bug", "Enhancement" or "Issue".</summary>
     public string TicketType { get; set; } = TicketTypes.Bug;
-    public int? AssignedToUserId { get; set; }
-    public string? AssignedToName { get; set; }
-    /// <summary>Who gave it to the current assignee. Null while the ticket is unassigned.</summary>
-    public string? AssignedByName { get; set; }
+    /// <summary>Everyone working on it, in the order they were added. Empty while unassigned.</summary>
+    public List<TicketAssignee> Assignees { get; set; } = new();
     public string State { get; set; } = "Open";
     public int Priority { get; set; } = 3;
     public string Impact { get; set; } = "Medium";
@@ -45,6 +43,9 @@ public class Ticket
     public List<TicketComment> Comments { get; set; } = new();
     public List<TicketHistoryEntry> History { get; set; } = new();
 }
+
+/// <summary>One person a ticket is assigned to, and who put them there.</summary>
+public record TicketAssignee(int UserId, string DisplayName, string? AssignedByName);
 
 public class TicketComment
 {
@@ -81,8 +82,15 @@ public class SaveTicketRequest
 
     public const int MaxDescriptionLength = 15_000_000;
 
-    /// <summary>Null means unassigned. Must be an active user.</summary>
-    public int? AssignedToUserId { get; set; }
+    /// <summary>
+    /// Everyone it is assigned to; empty means unassigned. Each must be an active user.
+    /// Absent (null) on an update leaves the assignees as they are: an app from before several
+    /// assignees does not send this field, and must not wipe them every time it saves a ticket.
+    /// </summary>
+    public List<int>? AssignedToUserIds { get; set; }
+
+    /// <summary>Enough for a pair or a small team; more than this is a project, not a ticket.</summary>
+    public const int MaxAssignees = 10;
 
     [AllowedValues(TicketTypes.Bug, TicketTypes.Enhancement, TicketTypes.Issue, ErrorMessage = TicketTypes.Message)]
     public string TicketType { get; set; } = TicketTypes.Bug;

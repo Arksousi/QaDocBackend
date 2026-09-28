@@ -20,6 +20,22 @@ public class UsersController(IUserRepository users, IPasswordHasher<UserRecord> 
         return Ok(await users.GetActiveOptionsAsync());
     }
 
+    /// <summary>The Users Dashboard: everyone's load against their limit. Admins and Leaders, who plan who does what.</summary>
+    [Authorize(Roles = Roles.Leads)]
+    [HttpGet("workload")]
+    public async Task<ActionResult<IEnumerable<UserWorkload>>> GetWorkload() => Ok(await users.GetWorkloadAsync());
+
+    /// <summary>
+    /// Changes only the ticket limit, so the dashboard can edit it in place without resending name,
+    /// role and status. Admin only: a Leader sees the loads but does not set anyone's capacity.
+    /// </summary>
+    [Authorize(Roles = Roles.Admin)]
+    [HttpPut("{id:int}/ticket-limit")]
+    public async Task<ActionResult> SetTicketLimit(int id, [FromBody] SetTicketLimitRequest request) =>
+        await users.SetTicketLimitAsync(id, request.TicketLimit)
+            ? NoContent()
+            : NotFound(new { message = $"User #{id} not found." });
+
     [Authorize(Roles = Roles.Admin)]
     [HttpGet]
     public async Task<ActionResult<IEnumerable<User>>> GetAll() =>

@@ -16,6 +16,9 @@ public static class SqlExtensions
     public static void AddTextArray(this NpgsqlParameterCollection p, string name, string[]? values) =>
         p.Add(new NpgsqlParameter(name, NpgsqlDbType.Array | NpgsqlDbType.Text) { Value = (object?)values ?? DBNull.Value });
 
+    public static void AddIntArray(this NpgsqlParameterCollection p, string name, int[] values) =>
+        p.Add(new NpgsqlParameter(name, NpgsqlDbType.Array | NpgsqlDbType.Integer) { Value = values });
+
     public static void AddBool(this NpgsqlParameterCollection p, string name, bool value) =>
         p.Add(new NpgsqlParameter(name, NpgsqlDbType.Boolean) { Value = value });
 

@@ -111,7 +111,7 @@ public static class ClaimsPrincipalExtensions
     public static Viewer AsViewer(this ClaimsPrincipal principal) =>
         principal.IsGuest()
             ? new Viewer(GuestUser.Id, IsAdmin: false, IsGuest: true)
-            : new Viewer(principal.GetUserId(), principal.IsInRole(Roles.Admin), IsGuest: false);
+            : new Viewer(principal.GetUserId(), principal.IsInRole(Roles.Admin), IsGuest: false, principal.IsInRole(Roles.Leader));
 
     /// <summary>Id of the signed-in user. Only valid inside [Authorize] endpoints.</summary>
     public static int GetUserId(this ClaimsPrincipal principal) =>

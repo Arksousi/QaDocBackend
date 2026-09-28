@@ -37,6 +37,28 @@ public class ProjectsController(
         return Ok(project);
     }
 
+    /// <summary>
+    /// The Leader Dashboard: every project the caller belongs to (all of them for an Admin), each with
+    /// its members' progress. Two queries in all, however many projects there are.
+    /// </summary>
+    [Authorize(Roles = Roles.Leads)]
+    [HttpGet("scoreboard")]
+    public async Task<ActionResult<IEnumerable<ProjectScoreboard>>> GetScoreboard()
+    {
+        var visible = (await projects.GetAllAsync(User.AsViewer())).ToList();
+        var scores = await members.GetScoresAsync(visible.Select(p => p.ProjectId).ToArray());
+
+        return Ok(visible.Select(p => new ProjectScoreboard
+        {
+            ProjectId = p.ProjectId, ProjectName = p.ProjectName, ProjectCode = p.ProjectCode,
+            CreatedAt = p.CreatedAt, CreatedByName = p.CreatedByName, TicketCount = p.TicketCount,
+            OpenTicketCount = p.OpenTicketCount, LastActivity = p.LastActivity, MyRole = p.MyRole,
+            Members = scores[p.ProjectId].ToList()
+        }));
+    }
+
+    /// <summary>Admins and Leaders only; the creator joins as a Contributor, which for them means managing it.</summary>
+    [Authorize(Roles = Roles.Leads)]
     [HttpPost]
     public async Task<ActionResult> Create([FromBody] CreateProjectRequest request)
     {
@@ -120,7 +142,10 @@ public class ProjectsController(
         return Ok(await members.GetByProjectAsync(id));
     }
 
-    /// <summary>Adds a member or changes their role. Admins anywhere; Managers on their own project.</summary>
+    /// <summary>
+    /// Adds a member as Viewer or Contributor, or changes which. Admins anywhere; on their own
+    /// project, Leaders who contribute to it.
+    /// </summary>
     [HttpPut("{id:int}/members")]
     public async Task<ActionResult> SaveMember(int id, [FromBody] SaveProjectMemberRequest request)
     {
@@ -133,15 +158,15 @@ public class ProjectsController(
             return ValidationProblem(detail: $"Role must be one of: {string.Join(", ", ProjectRoles.All)}.");
         if (!await users.IsActiveUserAsync(request.UserId))
             return ValidationProblem(detail: "Members must be active users.");
+        // Dropping to Viewer ends a Leader's management as surely as removing them does.
+        if (request.Role != ProjectRoles.Contributor && await LosesLastManager(id, request.UserId) is { } refused)
+            return refused;
 
         await members.SaveAsync(id, request.UserId, request.Role);
         return NoContent();
     }
 
-    /// <summary>
-    /// Removes a member. A Manager may not remove themselves while they are the only one, which
-    /// would leave the project reachable by Admins alone.
-    /// </summary>
+    /// <summary>Removes a member. The last Leader managing the project cannot be removed except by an Admin.</summary>
     [HttpDelete("{id:int}/members/{userId:int}")]
     public async Task<ActionResult> RemoveMember(int id, int userId)
     {
@@ -149,17 +174,27 @@ public class ProjectsController(
         if (level == ProjectAccess.None) return NotFoundProject(id);
         if (level < ProjectAccess.Manager) return Forbid();
 
-        var current = (await members.GetByProjectAsync(id)).ToList();
-        if (current.All(m => m.UserId != userId))
+        if ((await members.GetByProjectAsync(id)).All(m => m.UserId != userId))
             return NotFound(new { message = "That user is not a member of this project." });
-
-        bool lastManager = current.Count(m => m.Role == ProjectRoles.Manager) == 1
-            && current.Any(m => m.UserId == userId && m.Role == ProjectRoles.Manager);
-        if (lastManager && !User.IsInRole(Roles.Admin))
-            return ValidationProblem(detail: "Add another manager before removing the last one.");
+        if (await LosesLastManager(id, userId) is { } refused) return refused;
 
         await members.RemoveAsync(id, userId);
         return NoContent();
+    }
+
+    /// <summary>
+    /// Refuses a change that would take away the only Leader managing the project, which would leave
+    /// it manageable by Admins alone. An Admin may still do it.
+    /// </summary>
+    private async Task<ActionResult?> LosesLastManager(int projectId, int userId)
+    {
+        if (User.IsInRole(Roles.Admin)) return null;
+
+        var managing = (await members.GetByProjectAsync(projectId)).Where(m => m.CanManage).ToList();
+        bool last = managing.Count == 1 && managing[0].UserId == userId;
+        return last
+            ? ValidationProblem(detail: "Make another Leader a Contributor here before stepping back; otherwise only an Admin could manage this project.")
+            : null;
     }
 
     /// <summary>A project the user cannot see is reported as missing, so membership is not leaked.</summary>

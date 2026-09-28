@@ -23,7 +23,7 @@ public class FoldersController(
         return Ok(await folders.GetByProjectAsync(projectId));
     }
 
-    /// <summary>Managers organise a project's folders; Contributors only file tickets into them.</summary>
+    /// <summary>Leaders who contribute (and Admins) organise a project's folders; other Contributors only file tickets into them.</summary>
     [HttpPost]
     public async Task<ActionResult> Create(int projectId, [FromBody] SaveFolderRequest request)
     {
@@ -65,7 +65,7 @@ public class FoldersController(
         return NoContent();
     }
 
-    /// <summary>Hidden from non-members, forbidden for members below Manager.</summary>
+    /// <summary>Hidden from non-members, forbidden for members who do not manage the project.</summary>
     private async Task<ActionResult?> Denied(int projectId)
     {
         var level = await access.GetAsync(User, projectId);
