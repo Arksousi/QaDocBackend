@@ -112,7 +112,7 @@ The caller's own, never anyone else's: `GET /?top=` (newest first, only for proj
 `POST` (multipart, Contributor or better) and `GET /{id}`. Videos only — MP4, WebM, Ogg, QuickTime — capped by `Attachments.MaxBytes` and stored as bytes in `ticketattachments`. Downloads enable range processing so the browser can seek.
 
 ### `/api/users`
-`GET /options` for everyone; `GET /workload` (the Users Dashboard) for Admins and Leaders; `GET /`, `POST /`, `PUT /{id}`, `PUT /{id}/ticket-limit` and `POST /{id}/reset-password` are Admin only. Users carry an optional `ticketLimit` (1–100, null for none). `GET /options`, `GET /api/projects/{id}/assignees` and the scoreboard also return each person's `openTickets` — unfinished tickets across all real projects, one definition in `Data/Workload.cs` — so the app can warn; nothing is ever refused for being over a limit.
+`GET /options` for everyone; `GET /workload` (the Users Dashboard) and `GET /{id}/card` (the avatar hover card; it lists only projects the caller can open) for Admins and Leaders; `GET /`, `POST /`, `PUT /{id}`, `PUT /{id}/ticket-limit` and `POST /{id}/reset-password` are Admin only. Users carry an optional `ticketLimit` (1–100, null for none). `GET /options`, `GET /api/projects/{id}/assignees` and the scoreboard also return each person's `openTickets` — unfinished tickets across all real projects, one definition in `Data/Workload.cs` — so the app can warn; nothing is ever refused for being over a limit.
 
 ## Tests
 

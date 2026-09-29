@@ -12,6 +12,11 @@ public interface IUserRepository
     /// <summary>Every active person's load, fullest first against their limit, for the Users Dashboard.</summary>
     Task<IEnumerable<UserWorkload>> GetWorkloadAsync();
     Task<bool> SetTicketLimitAsync(int userId, int? ticketLimit);
+    /// <summary>
+    /// The hover card for <paramref name="userId"/>, or null when there is no such user. Projects are
+    /// only those <paramref name="viewer"/> can open too, so a card never names a project they cannot see.
+    /// </summary>
+    Task<UserCard?> GetCardAsync(int userId, Viewer viewer);
     Task<UserRecord?> GetByIdAsync(int userId);
     Task<UserRecord?> GetByUsernameAsync(string username);
     Task<int> CreateAsync(CreateUserRequest request, string passwordHash);
@@ -81,6 +86,48 @@ public class UserRepository(ISqlConnectionFactory db) : IUserRepository
                 r.Int("OpenTickets"), r.NInt("TicketLimit")));
         }
         return list;
+    }
+
+    public async Task<UserCard?> GetCardAsync(int userId, Viewer viewer)
+    {
+        // Totals use the same "real projects only" rule as Workload, so the card's unfinished count
+        // always equals the one on the Users Dashboard and in Assigned To.
+        string sql = $@"
+            SELECT u.UserId, u.DisplayName, u.Username, u.Role, u.IsActive, u.CreatedAt, u.TicketLimit,
+                   {Workload.OpenTicketsOf("u.UserId")} AS OpenTickets,
+                   (SELECT COUNT(*) FILTER (WHERE t.State = 'Closed')
+                    FROM TicketAssignees ta JOIN Tickets t ON t.TicketId = ta.TicketId
+                    JOIN Projects p ON p.ProjectId = t.ProjectId
+                    WHERE ta.UserId = u.UserId AND NOT p.IsDemo) AS ClosedTickets,
+                   (SELECT COUNT(*)
+                    FROM TicketAssignees ta JOIN Tickets t ON t.TicketId = ta.TicketId
+                    JOIN Projects p ON p.ProjectId = t.ProjectId
+                    WHERE ta.UserId = u.UserId AND NOT p.IsDemo) AS TotalAssigned
+            FROM Users u WHERE u.UserId = @UserId;
+
+            SELECT p.ProjectId, p.ProjectCode, p.ProjectName, m.Role
+            FROM ProjectMembers m
+            JOIN Projects p ON p.ProjectId = m.ProjectId
+            WHERE m.UserId = @UserId AND NOT p.IsDemo
+              AND (@IsAdmin OR EXISTS (SELECT 1 FROM ProjectMembers me WHERE me.ProjectId = p.ProjectId AND me.UserId = @ViewerId))
+            ORDER BY p.ProjectName;";
+
+        await using var conn = await db.OpenAsync();
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddInt("UserId", userId);
+        cmd.Parameters.AddInt("ViewerId", viewer.UserId);
+        cmd.Parameters.AddBool("IsAdmin", viewer.IsAdmin);
+        await using var r = await cmd.ExecuteReaderAsync();
+        if (!await r.ReadAsync()) return null;
+
+        var projects = new List<UserCardProject>();
+        var card = new UserCard(r.Int("UserId"), r.Str("DisplayName"), r.Str("Username"), r.Str("Role"), r.Bool("IsActive"),
+            r.Utc("CreatedAt"), r.NInt("TicketLimit"), r.Int("OpenTickets"), r.Int("ClosedTickets"), r.Int("TotalAssigned"), projects);
+
+        await r.NextResultAsync();
+        while (await r.ReadAsync())
+            projects.Add(new UserCardProject(r.Int("ProjectId"), r.Str("ProjectCode"), r.Str("ProjectName"), r.Str("Role")));
+        return card;
     }
 
     public async Task<bool> SetTicketLimitAsync(int userId, int? ticketLimit)

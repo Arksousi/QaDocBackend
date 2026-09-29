@@ -60,6 +60,8 @@ public class TicketComment
 public class TicketHistoryEntry
 {
     public int HistoryId { get; set; }
+    /// <summary>Who made the change; null for a row whose user has gone. Lets the app show their card.</summary>
+    public int? UserId { get; set; }
     public string UserName { get; set; } = string.Empty;
     public string Field { get; set; } = string.Empty;
     public string? OldValue { get; set; }

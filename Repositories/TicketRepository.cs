@@ -131,7 +131,7 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
             FROM TicketComments c LEFT JOIN Users u ON u.UserId = c.AuthorUserId
             WHERE c.TicketId = @TicketId ORDER BY c.CreatedAt, c.CommentId;
 
-            SELECT h.HistoryId, COALESCE(u.DisplayName, 'Unknown user') AS UserName, h.Field, h.OldValue, h.NewValue, h.ChangedAt
+            SELECT h.HistoryId, h.UserId, COALESCE(u.DisplayName, 'Unknown user') AS UserName, h.Field, h.OldValue, h.NewValue, h.ChangedAt
             FROM TicketHistory h LEFT JOIN Users u ON u.UserId = h.UserId
             WHERE h.TicketId = @TicketId ORDER BY h.ChangedAt DESC, h.HistoryId DESC;";
 
@@ -161,6 +161,7 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
             ticket.History.Add(new TicketHistoryEntry
             {
                 HistoryId = reader.Int("HistoryId"),
+                UserId = reader.NInt("UserId"),
                 UserName = reader.Str("UserName"),
                 Field = reader.Str("Field"),
                 OldValue = reader.NStr("OldValue"),

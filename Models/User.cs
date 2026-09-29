@@ -57,6 +57,17 @@ public class LoginRequest
 /// <summary>One row of the Users Dashboard: an active person's load against their limit.</summary>
 public record UserWorkload(int UserId, string DisplayName, string Username, string Role, int OpenTickets, int? TicketLimit);
 
+/// <summary>
+/// What an Admin or Leader sees when hovering someone's avatar: who they are, how loaded they are,
+/// and where they work. Ticket counts cover every real project.
+/// </summary>
+public record UserCard(
+    int UserId, string DisplayName, string Username, string Role, bool IsActive, DateTime CreatedAt,
+    int? TicketLimit, int OpenTickets, int ClosedTickets, int TotalAssigned, List<UserCardProject> Projects);
+
+/// <summary>A project on the card, with the person's access there.</summary>
+public record UserCardProject(int ProjectId, string ProjectCode, string ProjectName, string Role);
+
 /// <summary>Body for changing only someone's ticket limit, from the Users Dashboard.</summary>
 public class SetTicketLimitRequest
 {

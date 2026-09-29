@@ -25,6 +25,14 @@ public class UsersController(IUserRepository users, IPasswordHasher<UserRecord> 
     [HttpGet("workload")]
     public async Task<ActionResult<IEnumerable<UserWorkload>>> GetWorkload() => Ok(await users.GetWorkloadAsync());
 
+    /// <summary>The card shown when an Admin or Leader hovers someone's avatar.</summary>
+    [Authorize(Roles = Roles.Leads)]
+    [HttpGet("{id:int}/card")]
+    public async Task<ActionResult<UserCard>> GetCard(int id) =>
+        await users.GetCardAsync(id, User.AsViewer()) is { } card
+            ? Ok(card)
+            : NotFound(new { message = $"User #{id} not found." });
+
     /// <summary>
     /// Changes only the ticket limit, so the dashboard can edit it in place without resending name,
     /// role and status. Admin only: a Leader sees the loads but does not set anyone's capacity.
