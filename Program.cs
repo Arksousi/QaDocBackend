@@ -107,11 +107,17 @@ var corsPatterns = corsOrigins
         "^" + System.Text.RegularExpressions.Regex.Escape(o.Trim().TrimEnd('/')).Replace(@"\*", "[a-z0-9-]*") + "$",
         System.Text.RegularExpressions.RegexOptions.IgnoreCase))
     .ToArray();
+// In Development any page served from this machine may call the API, whatever its port: `ng serve`
+// on 4200 or a fallback port, VS Code's preview, or 127.0.0.1 instead of localhost. Production
+// never gets this: there only the configured origins are allowed.
+var allowLoopback = builder.Environment.IsDevelopment();
+static bool IsLoopback(string origin) =>
+    Uri.TryCreate(origin, UriKind.Absolute, out var uri) && uri.IsLoopback;
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAngularApp", policy =>
     {
-        policy.SetIsOriginAllowed(origin => corsPatterns.Any(p => p.IsMatch(origin)))
+        policy.SetIsOriginAllowed(origin => (allowLoopback && IsLoopback(origin)) || corsPatterns.Any(p => p.IsMatch(origin)))
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();

@@ -39,7 +39,7 @@ public class NotificationRepository(ISqlConnectionFactory db) : INotificationRep
         string sql = $@"
             SELECT n.NotificationId, t.TicketId, t.ProjectId,
                    p.ProjectCode || '-' || f.FolderCode || '-' || lpad(t.Sequence::text, 4, '0') AS TicketKey,
-                   t.Title, a.DisplayName AS ActorName, n.CreatedAt, n.ReadAt IS NOT NULL AS IsRead
+                   t.Title, a.DisplayName AS ActorName, n.CreatedAt, n.ReadAt IS NOT NULL AS IsRead, n.Kind
             {Visible}
             ORDER BY n.CreatedAt DESC, n.NotificationId DESC
             LIMIT @Top;";
@@ -54,7 +54,7 @@ public class NotificationRepository(ISqlConnectionFactory db) : INotificationRep
         {
             list.Add(new Notification(
                 r.Int("NotificationId"), r.Int("TicketId"), r.Int("ProjectId"), r.Str("TicketKey"), r.Str("Title"),
-                r.NStr("ActorName"), r.Utc("CreatedAt"), r.Bool("IsRead")));
+                r.NStr("ActorName"), r.Utc("CreatedAt"), r.Bool("IsRead"), r.Str("Kind")));
         }
         return list;
     }

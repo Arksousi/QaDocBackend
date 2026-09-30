@@ -55,7 +55,11 @@ public class TicketComment
     public string AuthorName { get; set; } = string.Empty;
     public string Text { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
+    /// <summary>People the comment @mentions; the app highlights "@DisplayName" in the text for each.</summary>
+    public List<CommentMention> Mentions { get; set; } = new();
 }
+
+public record CommentMention(int UserId, string DisplayName);
 
 public class TicketHistoryEntry
 {
@@ -114,6 +118,14 @@ public class AddCommentRequest
 {
     [Required, MinLength(1)]
     public string Text { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Who the comment @mentions. Each is told through the bell. Anyone who is not a Contributor on
+    /// the project (or an Admin) is dropped quietly: the comment still posts.
+    /// </summary>
+    public List<int>? MentionedUserIds { get; set; }
+
+    public const int MaxMentions = 20;
 }
 
 public enum UpdateOutcome

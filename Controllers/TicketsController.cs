@@ -80,7 +80,18 @@ public class TicketsController(
         if (string.IsNullOrWhiteSpace(request.Text))
             return ValidationProblem(detail: "Comment text is required.");
 
-        var comment = await tickets.AddCommentAsync(id, request.Text, User.GetUserId());
+        // Only people who work on the project can be mentioned: its Contributors, and Admins. Anyone
+        // else is dropped rather than refused — a stale name in a draft should not lose the comment.
+        // Mentioning yourself tells nobody anything.
+        int author = User.GetUserId();
+        var mentioned = new List<int>();
+        foreach (int userId in (request.MentionedUserIds ?? []).Distinct().Where(u => u != author).Take(AddCommentRequest.MaxMentions))
+        {
+            if (await access.GetForUserAsync(userId, ticket.ProjectId) >= ProjectAccess.Contributor)
+                mentioned.Add(userId);
+        }
+
+        var comment = await tickets.AddCommentAsync(id, request.Text, author, mentioned);
         return comment == null ? NotFoundTicket(id) : Ok(comment);
     }
 

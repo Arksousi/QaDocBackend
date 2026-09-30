@@ -165,6 +165,22 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS ix_notifications_user ON notifications (userid, createdat DESC);
 
+-- ---------- Comment mentions ----------
+-- Who an @mention in a comment points at. Stored rather than parsed back out of the text, so a
+-- name that changes later, or two people with similar names, never mislinks an old comment.
+CREATE TABLE IF NOT EXISTS commentmentions (
+    commentid INTEGER NOT NULL REFERENCES ticketcomments (commentid) ON DELETE CASCADE,
+    userid    INTEGER NOT NULL REFERENCES users (userid) ON DELETE CASCADE,
+    PRIMARY KEY (commentid, userid)
+);
+
+-- Notifications gained a kind: 'Assigned' (every row before this) or 'Mentioned', which also
+-- points at the comment. Existing rows take the default, which is what they all were.
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'Assigned';
+ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_kind_check;
+ALTER TABLE notifications ADD CONSTRAINT notifications_kind_check CHECK (kind IN ('Assigned', 'Mentioned'));
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS commentid INTEGER NULL REFERENCES ticketcomments (commentid) ON DELETE CASCADE;
+
 -- ============================================================
 -- Migrations for databases created by an earlier version.
 -- CREATE TABLE IF NOT EXISTS skips an existing table outright, so column and constraint

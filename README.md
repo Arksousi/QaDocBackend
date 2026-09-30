@@ -103,7 +103,7 @@ Errors go through `ApiExceptionHandler` and come back as RFC 7807 `ProblemDetail
 `GET` · `POST` · `PUT /{folderId}` · `DELETE /{folderId}`
 
 ### `/api/tickets`
-`GET /{id}` · `POST` · `PUT /{id}` · `POST /{id}/comments` · `DELETE /{id}` (Admin). Every field change is written to `tickethistory`. A ticket can have up to 10 assignees (`assignedToUserIds`), stored in `ticketassignees` with who added each; a save writes only the difference, and each person added gets a row in `notifications`, in the same transaction. A Leader who contributes (or an Admin) may assign someone outside the project, who is made a Contributor first.
+`GET /{id}` · `POST` · `PUT /{id}` · `POST /{id}/comments` · `DELETE /{id}` (Admin). Every field change is written to `tickethistory`. A ticket can have up to 10 assignees (`assignedToUserIds`), stored in `ticketassignees` with who added each; a save writes only the difference, and each person added gets a row in `notifications`, in the same transaction. `POST /{id}/comments` takes optional `mentionedUserIds`: Contributors (and Admins) on the project are stored in `commentmentions` and notified with kind `Mentioned`; anyone else, and the author, is dropped quietly. A Leader who contributes (or an Admin) may assign someone outside the project, who is made a Contributor first.
 
 ### `/api/notifications`
 The caller's own, never anyone else's: `GET /?top=` (newest first, only for projects they can still open), `GET /unread-count` (polled by the app every minute), `POST /{id}/read` (someone else's id is a 404) and `POST /read-all`.

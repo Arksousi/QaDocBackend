@@ -18,7 +18,8 @@ public interface ITicketRepository
     Task<UpdateOutcome> UpdateAsync(int ticketId, SaveTicketRequest request, int userId);
     Task<bool> DeleteAsync(int ticketId);
     /// <returns>The saved comment, or null when the ticket does not exist.</returns>
-    Task<TicketComment?> AddCommentAsync(int ticketId, string text, int userId);
+    /// <param name="mentionedUserIds">Already checked by the caller: people who may be mentioned here.</param>
+    Task<TicketComment?> AddCommentAsync(int ticketId, string text, int userId, IReadOnlyCollection<int> mentionedUserIds);
 }
 
 public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
@@ -131,6 +132,12 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
             FROM TicketComments c LEFT JOIN Users u ON u.UserId = c.AuthorUserId
             WHERE c.TicketId = @TicketId ORDER BY c.CreatedAt, c.CommentId;
 
+            SELECT cm.CommentId, cm.UserId, u.DisplayName
+            FROM CommentMentions cm
+            JOIN TicketComments c ON c.CommentId = cm.CommentId
+            JOIN Users u ON u.UserId = cm.UserId
+            WHERE c.TicketId = @TicketId;
+
             SELECT h.HistoryId, h.UserId, COALESCE(u.DisplayName, 'Unknown user') AS UserName, h.Field, h.OldValue, h.NewValue, h.ChangedAt
             FROM TicketHistory h LEFT JOIN Users u ON u.UserId = h.UserId
             WHERE h.TicketId = @TicketId ORDER BY h.ChangedAt DESC, h.HistoryId DESC;";
@@ -154,6 +161,14 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
 
         await reader.NextResultAsync();
         while (await reader.ReadAsync()) ticket.Comments.Add(MapComment(reader));
+
+        await reader.NextResultAsync();
+        var byComment = ticket.Comments.ToDictionary(c => c.CommentId);
+        while (await reader.ReadAsync())
+        {
+            if (byComment.TryGetValue(reader.Int("CommentId"), out var c))
+                c.Mentions.Add(new CommentMention(reader.Int("UserId"), reader.Str("DisplayName")));
+        }
 
         await reader.NextResultAsync();
         while (await reader.ReadAsync())
@@ -291,7 +306,7 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
         return await cmd.ExecuteNonQueryAsync() > 0;
     }
 
-    public async Task<TicketComment?> AddCommentAsync(int ticketId, string text, int userId)
+    public async Task<TicketComment?> AddCommentAsync(int ticketId, string text, int userId, IReadOnlyCollection<int> mentionedUserIds)
     {
         // Posting a comment counts as ticket activity (but not as a field change).
         // Nothing is inserted when the ticket doesn't exist.
@@ -307,13 +322,40 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
             FROM inserted i LEFT JOIN Users u ON u.UserId = i.AuthorUserId;";
 
         await using var conn = await db.OpenAsync();
-        await using var cmd = new NpgsqlCommand(sql, conn);
-        cmd.Parameters.AddInt("TicketId", ticketId);
-        cmd.Parameters.AddInt("UserId", userId);
-        cmd.Parameters.AddText("Text", text.Trim());
+        // One transaction: a comment never lands without its mentions, nor a "mentioned you" without the comment.
+        await using var tx = await conn.BeginTransactionAsync();
 
-        await using var reader = await cmd.ExecuteReaderAsync();
-        return await reader.ReadAsync() ? MapComment(reader) : null;
+        TicketComment comment;
+        await using (var cmd = new NpgsqlCommand(sql, conn, tx))
+        {
+            cmd.Parameters.AddInt("TicketId", ticketId);
+            cmd.Parameters.AddInt("UserId", userId);
+            cmd.Parameters.AddText("Text", text.Trim());
+            await using var reader = await cmd.ExecuteReaderAsync();
+            if (!await reader.ReadAsync()) return null;
+            comment = MapComment(reader);
+        }
+
+        if (mentionedUserIds.Count > 0)
+        {
+            const string mentionSql = @"
+                INSERT INTO CommentMentions (CommentId, UserId)
+                SELECT @CommentId, id FROM unnest(@Ids) AS id
+                ON CONFLICT DO NOTHING;
+                INSERT INTO Notifications (UserId, TicketId, ActorUserId, Kind, CommentId)
+                SELECT id, @TicketId, @ActorId, 'Mentioned', @CommentId FROM unnest(@Ids) AS id;
+                SELECT u.UserId, u.DisplayName FROM Users u WHERE u.UserId = ANY(@Ids) ORDER BY u.DisplayName;";
+            await using var cmd = new NpgsqlCommand(mentionSql, conn, tx);
+            cmd.Parameters.AddInt("CommentId", comment.CommentId);
+            cmd.Parameters.AddInt("TicketId", ticketId);
+            cmd.Parameters.AddInt("ActorId", userId);
+            cmd.Parameters.AddIntArray("Ids", mentionedUserIds.ToArray());
+            await using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync()) comment.Mentions.Add(new CommentMention(reader.Int("UserId"), reader.Str("DisplayName")));
+        }
+
+        await tx.CommitAsync();
+        return comment;
     }
 
     private sealed record Snapshot(string Title, string? Description, string TicketType,

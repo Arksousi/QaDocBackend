@@ -6,6 +6,12 @@ namespace QaDocBackend.Models;
 /// </summary>
 public record Notification(
     int NotificationId, int TicketId, int ProjectId, string TicketKey, string Title,
-    string? ActorName, DateTime CreatedAt, bool IsRead);
+    string? ActorName, DateTime CreatedAt, bool IsRead, string Kind);
+
+public static class NotificationKinds
+{
+    public const string Assigned = "Assigned";
+    public const string Mentioned = "Mentioned";
+}
 
 public record UnreadCount(int Count);
