@@ -20,6 +20,31 @@ public class UsersController(IUserRepository users, IPasswordHasher<UserRecord> 
         return Ok(await users.GetActiveOptionsAsync());
     }
 
+    /// <summary>
+    /// Who has a profile picture, and its version: the app swaps initials for pictures from this,
+    /// and refetches a picture only when its version moves. Any signed-in user; not guests.
+    /// </summary>
+    [HttpGet("avatars")]
+    public async Task<ActionResult<IEnumerable<AvatarVersion>>> Avatars()
+    {
+        if (User.IsGuest()) return Forbid();
+        return Ok(await users.GetAvatarVersionsAsync());
+    }
+
+    /// <summary>
+    /// Someone's profile picture. The app asks with ?v=version, so the response may be cached for
+    /// good: a new picture comes with a new version and so a new address.
+    /// </summary>
+    [HttpGet("{id:int}/avatar")]
+    public async Task<ActionResult> Avatar(int id)
+    {
+        if (User.IsGuest()) return Forbid();
+        var picture = await users.GetAvatarAsync(id);
+        if (picture == null) return NotFound(new { message = $"User #{id} has no picture." });
+        Response.Headers.CacheControl = "private, max-age=31536000, immutable";
+        return File(picture.Content, picture.ContentType);
+    }
+
     /// <summary>The Users Dashboard: everyone's load against their limit. Admins and Leaders, who plan who does what.</summary>
     [Authorize(Roles = Roles.Leads)]
     [HttpGet("workload")]

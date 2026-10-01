@@ -24,6 +24,9 @@ public interface ITicketRepository
 
 public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
 {
+    /// <summary>Moving a ticket into this state notifies its assignees.</summary>
+    private const string RetestState = "Retest";
+
     /// <summary>
     /// TicketKey is assembled here rather than stored, so renaming a project or folder code
     /// renames its keys instead of leaving the two out of step.
@@ -107,7 +110,7 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
 
     /// <summary>In the order people were added, so the first name shown is whoever had it first.</summary>
     private const string SelectAssignees = @"
-        SELECT ta.TicketId, ta.UserId, u.DisplayName, ab.DisplayName AS AssignedByName
+        SELECT ta.TicketId, ta.UserId, u.DisplayName, ab.DisplayName AS AssignedByName, ab.UserId AS AssignedByUserId
         FROM TicketAssignees ta
         JOIN Users u ON u.UserId = ta.UserId
         LEFT JOIN Users ab ON ab.UserId = ta.AssignedByUserId
@@ -115,7 +118,7 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
         ORDER BY ta.AssignedAt, u.DisplayName;";
 
     private static TicketAssignee MapAssignee(NpgsqlDataReader r) =>
-        new(r.Int("UserId"), r.Str("DisplayName"), r.NStr("AssignedByName"));
+        new(r.Int("UserId"), r.Str("DisplayName"), r.NStr("AssignedByName"), r.NInt("AssignedByUserId"));
 
     public async Task<Ticket?> GetByIdAsync(int ticketId)
     {
@@ -138,7 +141,7 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
             JOIN Users u ON u.UserId = cm.UserId
             WHERE c.TicketId = @TicketId;
 
-            SELECT h.HistoryId, h.UserId, COALESCE(u.DisplayName, 'Unknown user') AS UserName, h.Field, h.OldValue, h.NewValue, h.ChangedAt
+            SELECT h.HistoryId, h.UserId, CASE WHEN h.UserId IS NULL THEN 'QaDoc' ELSE COALESCE(u.DisplayName, 'Unknown user') END AS UserName, h.Field, h.OldValue, h.NewValue, h.ChangedAt
             FROM TicketHistory h LEFT JOIN Users u ON u.UserId = h.UserId
             WHERE h.TicketId = @TicketId ORDER BY h.ChangedAt DESC, h.HistoryId DESC;";
 
@@ -294,6 +297,9 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
             await del.ExecuteNonQueryAsync();
         }
         await AddAssigneesAsync(conn, tx, ticketId, added, userId);
+        // Sent back to be tested again: everyone on the ticket after this save is told, bar whoever moved it.
+        if (request.State == RetestState && before.State != RetestState)
+            await NotifyRetestAsync(conn, tx, ticketId, wanted, userId);
         await tx.CommitAsync();
         return UpdateOutcome.Updated;
     }
@@ -451,6 +457,20 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
         cmd.Parameters.AddInt("UserId", recipient);
         cmd.Parameters.AddInt("TicketId", ticketId);
         cmd.Parameters.AddInt("ActorId", actorId);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    private static async Task NotifyRetestAsync(NpgsqlConnection conn, NpgsqlTransaction tx, int ticketId, IEnumerable<int> assignees, int actorId)
+    {
+        var recipients = assignees.Where(id => id != actorId).Distinct().ToArray();
+        if (recipients.Length == 0) return;
+
+        await using var cmd = new NpgsqlCommand(
+            "INSERT INTO Notifications (UserId, TicketId, ActorUserId, Kind) SELECT id, @TicketId, @ActorId, @Kind FROM unnest(@Ids) AS id;", conn, tx);
+        cmd.Parameters.AddInt("TicketId", ticketId);
+        cmd.Parameters.AddInt("ActorId", actorId);
+        cmd.Parameters.AddText("Kind", NotificationKinds.Retest);
+        cmd.Parameters.AddIntArray("Ids", recipients);
         await cmd.ExecuteNonQueryAsync();
     }
 

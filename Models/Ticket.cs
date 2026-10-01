@@ -45,7 +45,8 @@ public class Ticket
 }
 
 /// <summary>One person a ticket is assigned to, and who put them there.</summary>
-public record TicketAssignee(int UserId, string DisplayName, string? AssignedByName);
+/// <summary>Someone on a ticket, and who put them there (null when that account is gone or unknown).</summary>
+public record TicketAssignee(int UserId, string DisplayName, string? AssignedByName, int? AssignedByUserId = null);
 
 public class TicketComment
 {
@@ -89,14 +90,17 @@ public class SaveTicketRequest
     public const int MaxDescriptionLength = 15_000_000;
 
     /// <summary>
-    /// Everyone it is assigned to; empty means unassigned. Each must be an active user.
-    /// Absent (null) on an update leaves the assignees as they are: an app from before several
-    /// assignees does not send this field, and must not wipe them every time it saves a ticket.
+    /// Who it is assigned to, as a list of at most <see cref="MaxAssignees"/>; empty means
+    /// unassigned. Each must be an active user. Absent (null) on an update leaves the assignee as
+    /// it is, so an older app that never sends this field does not unassign the ticket on save.
     /// </summary>
     public List<int>? AssignedToUserIds { get; set; }
 
-    /// <summary>Enough for a pair or a small team; more than this is a project, not a ticket.</summary>
-    public const int MaxAssignees = 10;
+    /// <summary>
+    /// One owner per ticket. Several were allowed for a while; that was reverted so every ticket has
+    /// exactly one person answerable for it. The list shape stays so the API contract did not change.
+    /// </summary>
+    public const int MaxAssignees = 1;
 
     [AllowedValues(TicketTypes.Bug, TicketTypes.Enhancement, TicketTypes.Issue, ErrorMessage = TicketTypes.Message)]
     public string TicketType { get; set; } = TicketTypes.Bug;

@@ -28,12 +28,22 @@ public interface IUserRepository
     Task<bool> SetPasswordAsync(int userId, string passwordHash);
     Task<int> CountActiveAdminsAsync();
     Task<bool> IsActiveUserAsync(int userId);
+    /// <summary>Your own profile fields. Username, role and limit are not touched.</summary>
+    Task<bool> UpdateProfileAsync(int userId, UpdateProfileRequest request);
+    /// <summary>Stores (or replaces) the picture and returns its new version.</summary>
+    Task<int> SetAvatarAsync(int userId, string contentType, byte[] content);
+    /// <summary>Removes the picture, if any, and returns the new version (so cached copies are dropped).</summary>
+    Task<int> DeleteAvatarAsync(int userId);
+    Task<AvatarContent?> GetAvatarAsync(int userId);
+    /// <summary>Active people who have a picture, with its current version.</summary>
+    Task<IEnumerable<AvatarVersion>> GetAvatarVersionsAsync();
 }
 
 public class UserRepository(ISqlConnectionFactory db) : IUserRepository
 {
     private const string SelectUser =
-        "SELECT UserId, Username, DisplayName, PasswordHash, Role, IsActive, TicketLimit, TokenVersion, CreatedAt FROM Users";
+        "SELECT UserId, Username, DisplayName, PasswordHash, Role, IsActive, TicketLimit, TokenVersion, CreatedAt, "
+        + "Email, JobTitle, Phone, Bio, AvatarVersion FROM Users";
 
     public async Task<bool> AnyUsersAsync()
     {
@@ -94,6 +104,7 @@ public class UserRepository(ISqlConnectionFactory db) : IUserRepository
         // always equals the one on the Users Dashboard and in Assigned To.
         string sql = $@"
             SELECT u.UserId, u.DisplayName, u.Username, u.Role, u.IsActive, u.CreatedAt, u.TicketLimit,
+                   u.JobTitle, u.Email, u.AvatarVersion,
                    {Workload.OpenTicketsOf("u.UserId")} AS OpenTickets,
                    (SELECT COUNT(*) FILTER (WHERE t.State = 'Closed')
                     FROM TicketAssignees ta JOIN Tickets t ON t.TicketId = ta.TicketId
@@ -122,7 +133,8 @@ public class UserRepository(ISqlConnectionFactory db) : IUserRepository
 
         var projects = new List<UserCardProject>();
         var card = new UserCard(r.Int("UserId"), r.Str("DisplayName"), r.Str("Username"), r.Str("Role"), r.Bool("IsActive"),
-            r.Utc("CreatedAt"), r.NInt("TicketLimit"), r.Int("OpenTickets"), r.Int("ClosedTickets"), r.Int("TotalAssigned"), projects);
+            r.Utc("CreatedAt"), r.NInt("TicketLimit"), r.Int("OpenTickets"), r.Int("ClosedTickets"), r.Int("TotalAssigned"), projects,
+            r.NStr("JobTitle"), r.NStr("Email"), r.Int("AvatarVersion"));
 
         await r.NextResultAsync();
         while (await r.ReadAsync())
@@ -237,6 +249,75 @@ public class UserRepository(ISqlConnectionFactory db) : IUserRepository
         return (bool)(await cmd.ExecuteScalarAsync())!;
     }
 
+    public async Task<bool> UpdateProfileAsync(int userId, UpdateProfileRequest request)
+    {
+        // Blank means "not given": stored as NULL, never as an empty string.
+        static string? Clean(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+        const string sql = @"
+            UPDATE Users SET DisplayName = @DisplayName, Email = @Email, JobTitle = @JobTitle, Phone = @Phone, Bio = @Bio
+            WHERE UserId = @UserId;";
+        await using var conn = await db.OpenAsync();
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddInt("UserId", userId);
+        cmd.Parameters.AddText("DisplayName", request.DisplayName.Trim());
+        cmd.Parameters.AddText("Email", Clean(request.Email));
+        cmd.Parameters.AddText("JobTitle", Clean(request.JobTitle));
+        cmd.Parameters.AddText("Phone", Clean(request.Phone));
+        cmd.Parameters.AddText("Bio", Clean(request.Bio));
+        return await cmd.ExecuteNonQueryAsync() > 0;
+    }
+
+    public async Task<int> SetAvatarAsync(int userId, string contentType, byte[] content)
+    {
+        // One statement: the picture and its version move together.
+        const string sql = @"
+            WITH saved AS (
+                INSERT INTO UserAvatars (UserId, ContentType, Content) VALUES (@UserId, @ContentType, @Content)
+                ON CONFLICT (UserId) DO UPDATE SET ContentType = EXCLUDED.ContentType, Content = EXCLUDED.Content, UpdatedAt = now()
+                RETURNING UserId)
+            UPDATE Users SET AvatarVersion = AvatarVersion + 1
+            WHERE UserId = (SELECT UserId FROM saved) RETURNING AvatarVersion;";
+        await using var conn = await db.OpenAsync();
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddInt("UserId", userId);
+        cmd.Parameters.AddText("ContentType", contentType);
+        cmd.Parameters.Add(new NpgsqlParameter("Content", NpgsqlTypes.NpgsqlDbType.Bytea) { Value = content });
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+    }
+
+    public async Task<int> DeleteAvatarAsync(int userId)
+    {
+        const string sql = @"
+            DELETE FROM UserAvatars WHERE UserId = @UserId;
+            UPDATE Users SET AvatarVersion = AvatarVersion + 1 WHERE UserId = @UserId RETURNING AvatarVersion;";
+        await using var conn = await db.OpenAsync();
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddInt("UserId", userId);
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+    }
+
+    public async Task<AvatarContent?> GetAvatarAsync(int userId)
+    {
+        await using var conn = await db.OpenAsync();
+        await using var cmd = new NpgsqlCommand("SELECT ContentType, Content FROM UserAvatars WHERE UserId = @UserId;", conn);
+        cmd.Parameters.AddInt("UserId", userId);
+        await using var r = await cmd.ExecuteReaderAsync();
+        if (!await r.ReadAsync()) return null;
+        return new AvatarContent(r.Str("ContentType"), (byte[])r["Content"]);
+    }
+
+    public async Task<IEnumerable<AvatarVersion>> GetAvatarVersionsAsync()
+    {
+        var list = new List<AvatarVersion>();
+        await using var conn = await db.OpenAsync();
+        await using var cmd = new NpgsqlCommand(@"
+            SELECT u.UserId, u.AvatarVersion FROM Users u JOIN UserAvatars a ON a.UserId = u.UserId
+            WHERE u.IsActive ORDER BY u.UserId;", conn);
+        await using var r = await cmd.ExecuteReaderAsync();
+        while (await r.ReadAsync()) list.Add(new AvatarVersion(r.Int("UserId"), r.Int("AvatarVersion")));
+        return list;
+    }
+
     private static void AddCreateParams(NpgsqlCommand cmd, CreateUserRequest r, string passwordHash)
     {
         cmd.Parameters.AddText("Username", r.Username.Trim());
@@ -254,7 +335,12 @@ public class UserRepository(ISqlConnectionFactory db) : IUserRepository
         IsActive = r.Bool("IsActive"),
         TicketLimit = r.NInt("TicketLimit"),
         TokenVersion = r.Int("TokenVersion"),
-        CreatedAt = r.Utc("CreatedAt")
+        CreatedAt = r.Utc("CreatedAt"),
+        Email = r.NStr("Email"),
+        JobTitle = r.NStr("JobTitle"),
+        Phone = r.NStr("Phone"),
+        Bio = r.NStr("Bio"),
+        AvatarVersion = r.Int("AvatarVersion")
     };
 
     /// <summary>Shared with ProjectMemberRepository's assignee list: both feed the same picker.</summary>

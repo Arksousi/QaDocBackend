@@ -12,6 +12,8 @@ public static class NotificationKinds
 {
     public const string Assigned = "Assigned";
     public const string Mentioned = "Mentioned";
+    /// <summary>The ticket was moved to Retest; sent to everyone assigned to it.</summary>
+    public const string Retest = "Retest";
 }
 
 public record UnreadCount(int Count);

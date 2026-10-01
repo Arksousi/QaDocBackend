@@ -177,8 +177,9 @@ CREATE TABLE IF NOT EXISTS commentmentions (
 -- Notifications gained a kind: 'Assigned' (every row before this) or 'Mentioned', which also
 -- points at the comment. Existing rows take the default, which is what they all were.
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'Assigned';
+-- 'Retest' (added later) tells the assignees their ticket was sent back to be tested again.
 ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_kind_check;
-ALTER TABLE notifications ADD CONSTRAINT notifications_kind_check CHECK (kind IN ('Assigned', 'Mentioned'));
+ALTER TABLE notifications ADD CONSTRAINT notifications_kind_check CHECK (kind IN ('Assigned', 'Mentioned', 'Retest'));
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS commentid INTEGER NULL REFERENCES ticketcomments (commentid) ON DELETE CASCADE;
 
 -- ============================================================
@@ -218,6 +219,23 @@ ALTER TABLE projectmembers ADD CONSTRAINT projectmembers_role_check
 ALTER TABLE users ADD COLUMN IF NOT EXISTS ticketlimit INTEGER NULL;
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_ticketlimit_check;
 ALTER TABLE users ADD CONSTRAINT users_ticketlimit_check CHECK (ticketlimit IS NULL OR ticketlimit BETWEEN 1 AND 100);
+
+-- Users gained a profile they fill in themselves: contact details and a picture. All optional.
+-- avatarversion counts picture changes, so the app can cache a picture until the number moves.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(254) NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS jobtitle VARCHAR(100) NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(40) NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS bio VARCHAR(500) NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatarversion INTEGER NOT NULL DEFAULT 0;
+
+-- The picture itself, in its own table so listing users never drags image bytes along.
+-- One row per user at most; the app sends a small square (256px) already, so rows stay small.
+CREATE TABLE IF NOT EXISTS useravatars (
+    userid      INTEGER PRIMARY KEY REFERENCES users (userid) ON DELETE CASCADE,
+    contenttype VARCHAR(50) NOT NULL,
+    content     BYTEA NOT NULL,
+    updatedat   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- Projects gained a demo flag for the guest tour. Existing projects are real work, so they
 -- default to FALSE and stay invisible to guests until something marks them.
@@ -320,3 +338,30 @@ BEGIN
     END IF;
 END $$;
 CREATE INDEX IF NOT EXISTS ix_ticketassignees_user ON ticketassignees (userid);
+
+-- Back to one person per ticket. Runs once, guarded by the unique index it ends by creating:
+-- a ticket that had several people keeps whoever was added first (ties: the lower user id), and
+-- its history records the change, attributed to no user (shown as "QaDoc"), so nobody is
+-- silently dropped. The index then stops a second assignee from ever being written again.
+DO $$
+BEGIN
+    IF to_regclass('ux_ticketassignees_one_per_ticket') IS NULL THEN
+        CREATE TEMP TABLE ranked_assignees ON COMMIT DROP AS
+        SELECT a.ticketid, a.userid, u.displayname,
+               row_number() OVER (PARTITION BY a.ticketid ORDER BY a.assignedat, a.userid) AS rn,
+               count(*)     OVER (PARTITION BY a.ticketid) AS n
+        FROM ticketassignees a JOIN users u ON u.userid = a.userid;
+
+        INSERT INTO tickethistory (ticketid, userid, field, oldvalue, newvalue)
+        SELECT ticketid, NULL, 'Assigned To',
+               string_agg(displayname, ', ' ORDER BY rn),
+               max(displayname) FILTER (WHERE rn = 1)
+        FROM ranked_assignees WHERE n > 1 GROUP BY ticketid;
+
+        DELETE FROM ticketassignees a
+        USING ranked_assignees r
+        WHERE r.ticketid = a.ticketid AND r.userid = a.userid AND r.rn > 1;
+
+        CREATE UNIQUE INDEX ux_ticketassignees_one_per_ticket ON ticketassignees (ticketid);
+    END IF;
+END $$;

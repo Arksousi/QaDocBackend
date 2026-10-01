@@ -59,7 +59,7 @@ The published image (see [Dockerfile](Dockerfile)) listens on `$PORT` when the h
 
 [Data/QaDocDb.sql](Data/QaDocDb.sql) is embedded in the assembly and applied by `SchemaInitializer` on every startup, retrying for a minute while the database boots. It is written to be idempotent — `CREATE TABLE IF NOT EXISTS` plus explicit `ALTER`s for columns added later, since `IF NOT EXISTS` skips an existing table outright. There is no migration step to run by hand; change the script and restart.
 
-Tables: `users`, `projects`, `folders`, `projectmembers`, `tickets`, `ticketassignees`, `tickettags`, `ticketcomments`, `tickethistory`, `ticketattachments`, `notifications`.
+Tables: `users`, `useravatars`, `projects`, `folders`, `projectmembers`, `tickets`, `ticketassignees`, `tickettags`, `ticketcomments`, `tickethistory`, `ticketattachments`, `notifications`. Profile pictures live in `useravatars`, one row per user, so listing users never loads image bytes; `users.avatarversion` goes up on every change.
 
 ## Authentication and authorization
 
@@ -103,16 +103,19 @@ Errors go through `ApiExceptionHandler` and come back as RFC 7807 `ProblemDetail
 `GET` · `POST` · `PUT /{folderId}` · `DELETE /{folderId}`
 
 ### `/api/tickets`
-`GET /{id}` · `POST` · `PUT /{id}` · `POST /{id}/comments` · `DELETE /{id}` (Admin). Every field change is written to `tickethistory`. A ticket can have up to 10 assignees (`assignedToUserIds`), stored in `ticketassignees` with who added each; a save writes only the difference, and each person added gets a row in `notifications`, in the same transaction. `POST /{id}/comments` takes optional `mentionedUserIds`: Contributors (and Admins) on the project are stored in `commentmentions` and notified with kind `Mentioned`; anyone else, and the author, is dropped quietly. A Leader who contributes (or an Admin) may assign someone outside the project, who is made a Contributor first.
+`GET /{id}` · `POST` · `PUT /{id}` · `POST /{id}/comments` · `DELETE /{id}` (Admin). Every field change is written to `tickethistory`. A ticket has at most one assignee. It is still sent as a list, `assignedToUserIds` (empty or one id; two or more is a 400), and stored in `ticketassignees` with who assigned them, one row per ticket at most (a unique index enforces it). A save writes only the difference, and the person assigned gets a row in `notifications`, in the same transaction. `POST /{id}/comments` takes optional `mentionedUserIds`: Contributors (and Admins) on the project are stored in `commentmentions` and notified with kind `Mentioned`; anyone else, and the author, is dropped quietly. A save that moves a ticket into `Retest` (from any other state) notifies the assignee, unless they saved it themselves, with kind `Retest`. A Leader who contributes (or an Admin) may assign someone outside the project, who is made a Contributor first.
 
 ### `/api/notifications`
 The caller's own, never anyone else's: `GET /?top=` (newest first, only for projects they can still open), `GET /unread-count` (polled by the app every minute), `POST /{id}/read` (someone else's id is a 404) and `POST /read-all`.
 
 ### `/api/attachments`
 `POST` (multipart, Contributor or better) and `GET /{id}`. Videos only — MP4, WebM, Ogg, QuickTime — capped by `Attachments.MaxBytes` and stored as bytes in `ticketattachments`. Downloads enable range processing so the browser can seek.
+### `/api/profile`
+Always the caller's own row, never an id from the request: `PUT /` saves display name, email, phone, job title and bio (blank is stored as null; bad email or phone is a 400); `POST /avatar` takes a multipart PNG, JPEG or WebP up to 2 MB, judged by its bytes rather than the declared type, and returns the new `avatarVersion`; `DELETE /avatar` removes it. Guests are refused by `GuestReadOnlyFilter`.
+
 
 ### `/api/users`
-`GET /options` for everyone; `GET /workload` (the Users Dashboard) and `GET /{id}/card` (the avatar hover card; it lists only projects the caller can open) for Admins and Leaders; `GET /`, `POST /`, `PUT /{id}`, `PUT /{id}/ticket-limit` and `POST /{id}/reset-password` are Admin only. Users carry an optional `ticketLimit` (1–100, null for none). `GET /options`, `GET /api/projects/{id}/assignees` and the scoreboard also return each person's `openTickets` — unfinished tickets across all real projects, one definition in `Data/Workload.cs` — so the app can warn; nothing is ever refused for being over a limit.
+`GET /options` for everyone; `GET /avatars` (who has a picture, and its version) and `GET /{id}/avatar?v=` (the image, cacheable for good since a new picture means a new version) for anyone signed in but guests — the app fetches pictures as blobs, because an `<img>` cannot send the token and `?access_token=` stays confined to attachments; `GET /workload` (the Users Dashboard) and `GET /{id}/card` (the avatar hover card; it lists only projects the caller can open) for Admins and Leaders; `GET /`, `POST /`, `PUT /{id}`, `PUT /{id}/ticket-limit` and `POST /{id}/reset-password` are Admin only. Users carry an optional `ticketLimit` (1–100, null for none). `GET /options`, `GET /api/projects/{id}/assignees` and the scoreboard also return each person's `openTickets` — unfinished tickets across all real projects, one definition in `Data/Workload.cs` — so the app can warn; nothing is ever refused for being over a limit.
 
 ## Tests
 

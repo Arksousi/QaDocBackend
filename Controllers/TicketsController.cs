@@ -121,7 +121,7 @@ public class TicketsController(
         // Not sent means unchanged (see SaveTicketRequest); on a new ticket, current is empty anyway.
         request.AssignedToUserIds = (request.AssignedToUserIds ?? current).Distinct().ToList();
         if (request.AssignedToUserIds.Count > SaveTicketRequest.MaxAssignees)
-            return ValidationProblem(detail: $"A ticket can be assigned to at most {SaveTicketRequest.MaxAssignees} people.");
+            return ValidationProblem(detail: "A ticket can be assigned to only one person.");
 
         // A ticket can only be given to somebody who actually works on the project: a Contributor,
         // or a global Admin. Only people being added are checked: someone already on it who has

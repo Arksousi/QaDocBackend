@@ -33,6 +33,59 @@ public class User
     /// <summary>How many unfinished tickets they should hold at once, across all projects; null for no limit.</summary>
     public int? TicketLimit { get; set; }
     public DateTime CreatedAt { get; set; }
+
+    // The profile they fill in themselves (PUT api/profile). All optional.
+    public string? Email { get; set; }
+    public string? JobTitle { get; set; }
+    public string? Phone { get; set; }
+    public string? Bio { get; set; }
+    /// <summary>0 while they have no picture; goes up each time it changes, so a cached copy can be trusted until it does.</summary>
+    public int AvatarVersion { get; set; }
+}
+
+/// <summary>Body for editing your own profile. Username and role stay with the Admin.</summary>
+public class UpdateProfileRequest
+{
+    [Required, StringLength(100, MinimumLength = 1)]
+    public string DisplayName { get; set; } = string.Empty;
+
+    [EmailAddress(ErrorMessage = "Enter a valid email address, or leave it empty.")]
+    [StringLength(254)]
+    public string? Email { get; set; }
+
+    [StringLength(100)]
+    public string? JobTitle { get; set; }
+
+    [StringLength(40)]
+    [RegularExpression(@"^[0-9+()\-.\s]*$", ErrorMessage = "A phone number may contain digits, spaces and + ( ) - . only.")]
+    public string? Phone { get; set; }
+
+    [StringLength(500)]
+    public string? Bio { get; set; }
+}
+
+/// <summary>Someone who has a picture, and which version of it is current.</summary>
+public record AvatarVersion(int UserId, int Version);
+
+/// <summary>A stored picture, as served.</summary>
+public record AvatarContent(string ContentType, byte[] Content);
+
+/// <summary>What a profile picture may be. The app crops and shrinks it to 256px before sending.</summary>
+public static class Avatars
+{
+    public const long MaxBytes = 2 * 1024 * 1024;
+
+    /// <summary>
+    /// The image type from the file's own first bytes, or null when it is not PNG, JPEG or WebP.
+    /// Checked from the bytes, not the declared content type, which the client chooses.
+    /// </summary>
+    public static string? Sniff(ReadOnlySpan<byte> b)
+    {
+        if (b.Length >= 8 && b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) return "image/png";
+        if (b.Length >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) return "image/jpeg";
+        if (b.Length >= 12 && b[..4].SequenceEqual("RIFF"u8) && b[8..12].SequenceEqual("WEBP"u8)) return "image/webp";
+        return null;
+    }
 }
 
 /// <summary>Internal row including secrets; never returned by the API.</summary>
@@ -63,7 +116,8 @@ public record UserWorkload(int UserId, string DisplayName, string Username, stri
 /// </summary>
 public record UserCard(
     int UserId, string DisplayName, string Username, string Role, bool IsActive, DateTime CreatedAt,
-    int? TicketLimit, int OpenTickets, int ClosedTickets, int TotalAssigned, List<UserCardProject> Projects);
+    int? TicketLimit, int OpenTickets, int ClosedTickets, int TotalAssigned, List<UserCardProject> Projects,
+    string? JobTitle = null, string? Email = null, int AvatarVersion = 0);
 
 /// <summary>A project on the card, with the person's access there.</summary>
 public record UserCardProject(int ProjectId, string ProjectCode, string ProjectName, string Role);
