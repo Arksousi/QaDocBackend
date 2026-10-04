@@ -10,6 +10,7 @@ namespace QaDocBackend.Controllers;
 [Route("api/[controller]")]
 public class TicketsController(
     ITicketRepository tickets,
+    IProjectRepository projects,
     IFolderRepository folders,
     IUserRepository users,
     IProjectMemberRepository members,
@@ -17,6 +18,23 @@ public class TicketsController(
 {
     private const int MaxTags = 20;
     private const int MaxTagLength = 50;
+
+    /// <summary>
+    /// Top-bar global search across every project the caller can see — the same list the Project
+    /// Menu shows them, so the demo/real split holds without this endpoint repeating the rule.
+    /// Two characters minimum: one character would match half the workspace and scan for it.
+    /// </summary>
+    [HttpGet("search")]
+    public async Task<ActionResult<IEnumerable<TicketSearchResult>>> Search([FromQuery] string? q)
+    {
+        if (string.IsNullOrWhiteSpace(q) || q.Trim().Length < 2)
+            return Ok(Array.Empty<TicketSearchResult>());
+
+        var visible = (await projects.GetAllAsync(User.AsViewer())).Select(p => p.ProjectId).ToList();
+        if (visible.Count == 0) return Ok(Array.Empty<TicketSearchResult>());
+
+        return Ok(await tickets.SearchAsync(q, visible, limit: 20));
+    }
 
     [HttpGet("{id:int}")]
     public async Task<ActionResult<Ticket>> GetById(int id)

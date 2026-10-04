@@ -13,6 +13,12 @@ public interface ITicketRepository
     /// AND-ed with each other; null or empty means that field is not filtered at all.
     /// </summary>
     Task<IEnumerable<Ticket>> GetByProjectAsync(int projectId, int? folderId, string? search, string[]? states, string[]? types, string[]? tags, int? assignedToUserId);
+    /// <summary>
+    /// Top-bar global search across every project the caller can see (the caller's visible set is
+    /// resolved by the controller through ProjectRepository, so the demo/real split stays in one
+    /// place). Matches title, ticket key or tag; newest activity first, capped at <paramref name="limit"/>.
+    /// </summary>
+    Task<IEnumerable<TicketSearchResult>> SearchAsync(string search, IReadOnlyCollection<int> projectIds, int limit);
     Task<Ticket?> GetByIdAsync(int ticketId);
     Task<int> CreateAsync(SaveTicketRequest request, int userId);
     Task<UpdateOutcome> UpdateAsync(int ticketId, SaveTicketRequest request, int userId);
@@ -106,6 +112,46 @@ public class TicketRepository(ISqlConnectionFactory db) : ITicketRepository
                 byId[reader.Int("TicketId")].Assignees.Add(MapAssignee(reader));
         }
         return tickets;
+    }
+
+    /// <summary>Global search from the top bar, across the projects the controller deemed visible.</summary>
+    public async Task<IEnumerable<TicketSearchResult>> SearchAsync(string search, IReadOnlyCollection<int> projectIds, int limit)
+    {
+        string sql = @"
+            SELECT t.TicketId, t.ProjectId, p.ProjectName,
+                   p.ProjectCode || '-' || f.FolderCode || '-' || lpad(t.Sequence::text, 4, '0') AS TicketKey,
+                   t.Title, t.State, t.TicketType, t.ActivityDate
+            FROM Tickets t
+            JOIN Folders f  ON f.FolderId = t.FolderId
+            JOIN Projects p ON p.ProjectId = t.ProjectId
+            WHERE t.ProjectId = ANY(@ProjectIds)
+              AND (t.Title ILIKE '%' || @Search || '%'
+                   OR p.ProjectCode || '-' || f.FolderCode || '-' || lpad(t.Sequence::text, 4, '0') ILIKE '%' || @Search || '%'
+                   OR EXISTS (SELECT 1 FROM TicketTags tt WHERE tt.TicketId = t.TicketId AND tt.Tag ILIKE '%' || @Search || '%'))
+            ORDER BY t.ActivityDate DESC, t.TicketId DESC
+            LIMIT @Limit;";
+
+        await using var conn = await db.OpenAsync();
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddIntArray("ProjectIds", projectIds.ToArray());
+        cmd.Parameters.AddText("Search", SqlExtensions.EscapeLike(search.Trim()));
+        cmd.Parameters.AddInt("Limit", limit);
+
+        var hits = new List<TicketSearchResult>();
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            hits.Add(new TicketSearchResult
+            {
+                TicketId = reader.Int("TicketId"),
+                ProjectId = reader.Int("ProjectId"),
+                ProjectName = reader.Str("ProjectName"),
+                TicketKey = reader.Str("TicketKey"),
+                Title = reader.Str("Title"),
+                State = reader.Str("State"),
+                TicketType = reader.Str("TicketType"),
+                ActivityDate = reader.GetDateTime(reader.GetOrdinal("ActivityDate")),
+            });
+        return hits;
     }
 
     /// <summary>In the order people were added, so the first name shown is whoever had it first.</summary>

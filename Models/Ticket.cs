@@ -138,3 +138,20 @@ public enum UpdateOutcome
     Unchanged,
     Updated
 }
+
+/// <summary>
+/// One hit from the top-bar global search: just enough to show what matched and where it lives.
+/// The full ticket is not loaded — descriptions can carry embedded pictures.
+/// </summary>
+public class TicketSearchResult
+{
+    public int TicketId { get; set; }
+    public int ProjectId { get; set; }
+    public string ProjectName { get; set; } = string.Empty;
+    /// <summary>Assembled on read, like every other key: renaming a code renames the hit too.</summary>
+    public string TicketKey { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string State { get; set; } = string.Empty;
+    public string TicketType { get; set; } = string.Empty;
+    public DateTime ActivityDate { get; set; }
+}
