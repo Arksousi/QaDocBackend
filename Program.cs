@@ -35,6 +35,41 @@ builder.Services.AddScoped<ITicketRepository, TicketRepository>();
 builder.Services.AddScoped<IUserRepository, UserRepository>();
 builder.Services.AddScoped<INotificationRepository, NotificationRepository>();
 builder.Services.AddScoped<IProjectAccessService, ProjectAccessService>();
+// ---------- Test Case Generator ----------
+// One interface, the provider named by config, and a named HttpClient shared by both providers:
+// 90 s is long enough for a vision model to read several screenshots and answer, and the single
+// retry on a transient failure lives in ProviderHttp so no extra policy package is needed.
+var generatorSettings = builder.Configuration.GetSection("TestCaseGenerator").Get<TestCaseGeneratorSettings>() ?? new TestCaseGeneratorSettings();
+if (!TestCaseProviders.IsKnown(generatorSettings.Provider))
+    throw new InvalidOperationException(
+        $"TestCaseGenerator:Provider must be one of {string.Join(", ", TestCaseProviders.All)} (got \"{generatorSettings.Provider}\").");
+builder.Services.AddSingleton(generatorSettings);
+builder.Services.AddSingleton(builder.Configuration.GetSection("Groq").Get<GroqSettings>() ?? new GroqSettings());
+builder.Services.AddSingleton(builder.Configuration.GetSection("Gemini").Get<GeminiSettings>() ?? new GeminiSettings());
+builder.Services.AddScoped<ITestSuiteRepository, TestSuiteRepository>();
+// Per-user allowance for generate: in memory, an hour wide, configured rather than compiled.
+builder.Services.AddSingleton<IGenerationRateLimiter, GenerationRateLimiter>();
+builder.Services.AddHttpClient(GroqTestCaseGenerator.HttpClientName, client =>
+    client.Timeout = TimeSpan.FromSeconds(90));
+builder.Services.AddSingleton<GroqTestCaseGenerator>();
+builder.Services.AddSingleton<GeminiTestCaseGenerator>();
+// "Mock" answers from memory. It is what the test suites point at, so no test can reach a real key.
+builder.Services.AddSingleton<MockTestCaseGenerator>();
+builder.Services.AddSingleton<ITestCaseGenerator, ConfiguredTestCaseGenerator>();
+
+// ---------- QC Generator (Product Documentation & User Manual) ----------
+var docGeneratorSettings = builder.Configuration.GetSection("DocumentGenerator").Get<DocumentGeneratorSettings>() ?? new DocumentGeneratorSettings();
+if (!DocumentProviders.IsKnown(docGeneratorSettings.Provider))
+    throw new InvalidOperationException(
+        $"DocumentGenerator:Provider must be one of {string.Join(", ", DocumentProviders.All)} (got \"{docGeneratorSettings.Provider}\").");
+builder.Services.AddSingleton(docGeneratorSettings);
+builder.Services.AddScoped<IQcRepository, QcRepository>();
+builder.Services.AddSingleton<IQcGenerationRateLimiter, QcGenerationRateLimiter>();
+builder.Services.AddSingleton<GroqDocumentGenerator>();
+builder.Services.AddSingleton<GeminiDocumentGenerator>();
+builder.Services.AddSingleton<MockDocumentGenerator>();
+builder.Services.AddSingleton<IDocumentGenerator, ConfiguredDocumentGenerator>();
+builder.Services.AddSingleton<IQcJobService, QcJobService>();
 // ---------- Authentication (JWT) ----------
 var jwt = builder.Configuration.GetSection("Jwt").Get<JwtSettings>() ?? new JwtSettings();
 var signingKey = jwt.SigningKey(); // fails fast at startup when the key is missing
@@ -130,7 +165,7 @@ app.UseExceptionHandler();
 app.UseSwagger();
 app.UseSwaggerUI(c =>
 {
-    c.SwaggerEndpoint("/swagger/v1/swagger.json", "QaDoc API v1");
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Q Desk API v1");
     c.RoutePrefix = "swagger";
 });
 app.UseRouting();

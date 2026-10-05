@@ -365,3 +365,121 @@ BEGIN
         CREATE UNIQUE INDEX ux_ticketassignees_one_per_ticket ON ticketassignees (ticketid);
     END IF;
 END $$;
+
+-- ============================================================
+-- Test Case Generator: suites, screenshots and test cases.
+-- A suite belongs to a project and reuses project membership, so there is no second
+-- permission system here to keep in step with the first.
+-- ============================================================
+
+-- ---------- Test suites ----------
+-- isdemo mirrors projects.isdemo (copied when the suite is created): a guest may only browse
+-- the suites of a demo project, exactly as they may only browse demo projects' tickets.
+-- nextsequence hands out the per-suite test case number under a row lock, the same way
+-- folders.nextsequence hands out ticket numbers, so two creates never share a number.
+CREATE TABLE IF NOT EXISTS testsuites (
+    suiteid             INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    projectid           INTEGER NOT NULL REFERENCES projects (projectid) ON DELETE CASCADE,
+    folderid            INTEGER NULL REFERENCES folders (folderid) ON DELETE SET NULL,
+    title               VARCHAR(200) NOT NULL,
+    businessdescription TEXT NULL,
+    createdbyuserid     INTEGER NULL REFERENCES users (userid),
+    createdat           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    isdemo              BOOLEAN NOT NULL DEFAULT FALSE,
+    nextsequence        INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS ix_testsuites_project ON testsuites (projectid);
+
+-- ---------- Suite screenshots ----------
+-- The bytes live in ticketattachments (with no ticket), so a screenshot shares the storage,
+-- the picture pipeline and GET /api/attachments/{id} with every other picture in the app.
+CREATE TABLE IF NOT EXISTS testsuitescreens (
+    screenid            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    suiteid             INTEGER NOT NULL REFERENCES testsuites (suiteid) ON DELETE CASCADE,
+    attachmentid        INTEGER NOT NULL REFERENCES ticketattachments (attachmentid) ON DELETE CASCADE,
+    sortorder           INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_testsuitescreens_suite ON testsuitescreens (suiteid, sortorder);
+
+-- ---------- Test cases ----------
+-- number is the counter within its suite and is shown as TC-0001; steps is a JSONB array of
+-- strings. linkedticketid is set null when the ticket goes: a test case must never be what
+-- stops a ticket from being deleted.
+CREATE TABLE IF NOT EXISTS testcases (
+    testcaseid     INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    suiteid        INTEGER NOT NULL REFERENCES testsuites (suiteid) ON DELETE CASCADE,
+    number         INTEGER NOT NULL,
+    title          VARCHAR(200) NOT NULL,
+    category       VARCHAR(20) NOT NULL DEFAULT 'Functional'
+                   CHECK (category IN ('Functional', 'Negative', 'Boundary', 'UI')),
+    priority       SMALLINT NOT NULL DEFAULT 3 CHECK (priority BETWEEN 1 AND 4),
+    preconditions  TEXT NULL,
+    steps          JSONB NOT NULL DEFAULT '[]'::jsonb,
+    expected       TEXT NULL,
+    status         VARCHAR(20) NOT NULL DEFAULT 'Draft'
+                   CHECK (status IN ('Draft', 'Approved', 'Passed', 'Failed')),
+    linkedticketid INTEGER NULL REFERENCES tickets (ticketid) ON DELETE SET NULL,
+    source         VARCHAR(20) NOT NULL DEFAULT 'Manual'
+                   CHECK (source IN ('Ai', 'Imported', 'Manual')),
+    createdat      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Both halves of the numbering rule: the counter is taken under a lock, and this index is what
+-- would catch a collision. Two suites may each hold their own TC-0001.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_testcases_suite_number ON testcases (suiteid, number);
+CREATE INDEX IF NOT EXISTS ix_testcases_suite ON testcases (suiteid);
+
+-- ============================================================
+-- QC Generator: doc sets, screens and versioned documents.
+-- A doc set belongs to a project and reuses project membership (Viewer reads,
+-- Contributor creates/edits). Guests see demo doc sets and approved documents only.
+-- ============================================================
+
+-- ---------- QC Doc Sets ----------
+-- isdemo mirrors projects.isdemo so a guest only browses demo doc sets.
+-- logoattachmentid points to ticketattachments for consistent storage and resize.
+CREATE TABLE IF NOT EXISTS qcdocsets (
+    docsetid            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    projectid           INTEGER NOT NULL REFERENCES projects (projectid) ON DELETE CASCADE,
+    title               VARCHAR(200) NOT NULL,
+    appname             VARCHAR(200) NOT NULL,
+    businessdescription TEXT NULL,
+    language            VARCHAR(10) NOT NULL DEFAULT 'en',
+    logoattachmentid    INTEGER NULL REFERENCES ticketattachments (attachmentid) ON DELETE SET NULL,
+    createdby           INTEGER NULL REFERENCES users (userid),
+    createdat           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    isdemo              BOOLEAN NOT NULL DEFAULT FALSE
+);
+CREATE INDEX IF NOT EXISTS ix_qcdocsets_project ON qcdocsets (projectid);
+
+-- ---------- QC Doc Screens ----------
+-- The screenshots arranged in order by the user. Each screen may have a caption
+-- and stores the AI-extracted screen summary (JSON) so that repeated document
+-- generations or manual user manual generation can reuse the analysis without re-calling vision AI.
+CREATE TABLE IF NOT EXISTS qcdocscreens (
+    screenid            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    docsetid            INTEGER NOT NULL REFERENCES qcdocsets (docsetid) ON DELETE CASCADE,
+    sortorder           INTEGER NOT NULL DEFAULT 0,
+    caption             VARCHAR(200) NULL,
+    attachmentid        INTEGER NOT NULL REFERENCES ticketattachments (attachmentid) ON DELETE CASCADE,
+    screensummary       TEXT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_qcdocscreens_docset ON qcdocscreens (docsetid, sortorder);
+
+-- ---------- QC Documents ----------
+-- Versioned documents produced for a docset (Documentation or UserManual).
+-- Versions start at 1 and increment per (docsetid, kind). Never overwritten.
+CREATE TABLE IF NOT EXISTS qcdocuments (
+    documentid          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    docsetid            INTEGER NOT NULL REFERENCES qcdocsets (docsetid) ON DELETE CASCADE,
+    kind                VARCHAR(20) NOT NULL CHECK (kind IN ('Documentation', 'UserManual')),
+    version             INTEGER NOT NULL DEFAULT 1,
+    markdown            TEXT NOT NULL,
+    status              VARCHAR(20) NOT NULL DEFAULT 'Draft'
+                        CHECK (status IN ('Draft', 'Approved')),
+    source              VARCHAR(20) NOT NULL DEFAULT 'Ai'
+                        CHECK (source IN ('Ai', 'Imported', 'Manual')),
+    generatedby         INTEGER NULL REFERENCES users (userid),
+    createdat           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ix_qcdocuments_docset ON qcdocuments (docsetid, kind, version DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_qcdocuments_docset_kind_version ON qcdocuments (docsetid, kind, version);

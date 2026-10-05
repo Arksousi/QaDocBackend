@@ -118,3 +118,7 @@ D:\dev\QaDoc\QaDocBackend\bincheck\Debug\net9.0\Swashbuckle.AspNetCore.Swagger.d
 D:\dev\QaDoc\QaDocBackend\bincheck\Debug\net9.0\Swashbuckle.AspNetCore.SwaggerGen.dll
 D:\dev\QaDoc\QaDocBackend\bincheck\Debug\net9.0\Swashbuckle.AspNetCore.SwaggerUI.dll
 D:\dev\QaDoc\QaDocBackend\bincheck\Debug\net9.0\System.IdentityModel.Tokens.Jwt.dll
+D:\dev\QaDoc\QaDocBackend\bin\Debug\net9.0\SixLabors.ImageSharp.dll
+D:\dev\QaDoc\QaDocBackend\bin\Debug\net9.0\DocumentFormat.OpenXml.dll
+D:\dev\QaDoc\QaDocBackend\bin\Debug\net9.0\DocumentFormat.OpenXml.Framework.dll
+D:\dev\QaDoc\QaDocBackend\bin\Debug\net9.0\System.IO.Packaging.dll

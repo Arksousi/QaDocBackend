@@ -10,6 +10,10 @@ public class ApiExceptionHandler(ILogger<ApiExceptionHandler> logger) : IExcepti
     {
         (int status, string title) = exception switch
         {
+            // A provider problem the endpoint could not prevent: a spent quota, a missing key, a
+            // reply nothing could be read from. Shown as itself rather than as an unexpected error.
+            TestCaseGeneratorException generator => (generator.StatusCode, generator.Message),
+            DocumentGeneratorException docGen => (docGen.StatusCode, docGen.Message),
             PostgresException { SqlState: PostgresErrorCodes.UniqueViolation } => (StatusCodes.Status409Conflict, "A record with the same unique value already exists."),
             PostgresException { SqlState: PostgresErrorCodes.ForeignKeyViolation } => (StatusCodes.Status409Conflict, "The operation conflicts with related records (invalid reference or record still in use)."),
             _ => (StatusCodes.Status500InternalServerError, "An unexpected error occurred.")
